@@ -30,6 +30,15 @@ function getEnvValue(keys) {
   return undefined;
 }
 
+function hasEnvValue(key) {
+  const value = process.env[key];
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+function getPresentEnvKeys(keys) {
+  return keys.filter(hasEnvValue);
+}
+
 const CONNECTION_STRING = getEnvValue(CONNECTION_STRING_ENV_KEYS);
 
 const DEFAULT_DB_NAME = getEnvValue(DB_NAME_ENV_KEYS) || 'fitdaptive';
@@ -81,6 +90,19 @@ function hasExplicitDbConfig() {
     || getEnvValue(DB_PASSWORD_ENV_KEYS)
     || getEnvValue(DB_NAME_ENV_KEYS)
   );
+}
+
+function getDbEnvDiagnostics() {
+  return {
+    railwayRuntime: isRailwayRuntime(),
+    nodeEnv: process.env.NODE_ENV || null,
+    presentConnectionStringKeys: getPresentEnvKeys(CONNECTION_STRING_ENV_KEYS),
+    presentHostKeys: getPresentEnvKeys(DB_HOST_ENV_KEYS),
+    presentPortKeys: getPresentEnvKeys(DB_PORT_ENV_KEYS),
+    presentUserKeys: getPresentEnvKeys(DB_USER_ENV_KEYS),
+    presentPasswordKeys: getPresentEnvKeys(DB_PASSWORD_ENV_KEYS),
+    presentNameKeys: getPresentEnvKeys(DB_NAME_ENV_KEYS),
+  };
 }
 
 function createPoolConfig() {
@@ -220,6 +242,7 @@ const pool = {
 
 const connectDB = async () => {
   if (poolSetup.isFallbackLocalhost && (process.env.NODE_ENV === 'production' || isRailwayRuntime())) {
+    console.error('[DB] Env diagnostics:', JSON.stringify(getDbEnvDiagnostics()));
     console.error(
       '[DB] Missing PostgreSQL environment variables. '
       + 'If you use an external database such as Supabase, set DATABASE_URL directly '
