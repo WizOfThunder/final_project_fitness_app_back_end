@@ -19,11 +19,27 @@ const DB_USER_ENV_KEYS = ['DB_USER', 'PGUSER', 'POSTGRES_USER'];
 const DB_PASSWORD_ENV_KEYS = ['DB_PASSWORD', 'PGPASSWORD', 'POSTGRES_PASSWORD'];
 const DB_NAME_ENV_KEYS = ['DB_NAME', 'PGDATABASE', 'POSTGRES_DB'];
 
+function normalizeEnvValue(value) {
+  if (typeof value !== 'string') return undefined;
+
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"'))
+    || (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+
+  return trimmed;
+}
+
 function getEnvValue(keys) {
   for (const key of keys) {
-    const value = process.env[key];
-    if (typeof value === 'string' && value.trim() !== '') {
-      return value.trim();
+    const value = normalizeEnvValue(process.env[key]);
+    if (value) {
+      return value;
     }
   }
 
@@ -31,8 +47,7 @@ function getEnvValue(keys) {
 }
 
 function hasEnvValue(key) {
-  const value = process.env[key];
-  return typeof value === 'string' && value.trim() !== '';
+  return Boolean(normalizeEnvValue(process.env[key]));
 }
 
 function getPresentEnvKeys(keys) {
@@ -132,6 +147,10 @@ function isSupabaseDirectIpv6Issue(error) {
     && endpoint.port === '5432'
     && /^db\..+\.supabase\.co$/i.test(endpoint.hostname)
   );
+}
+
+function isMalformedConnectionString(error) {
+  return error?.code === 'ERR_INVALID_URL' && Boolean(CONNECTION_STRING);
 }
 
 function createPoolConfig() {
@@ -291,6 +310,14 @@ const connectDB = async () => {
     console.log('PostgreSQL connected');
     client.release();
   } catch (error) {
+    if (isMalformedConnectionString(error)) {
+      console.error(
+        '[DB] DATABASE_URL is present but malformed. Use a plain Postgres URL such as '
+        + 'postgres://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres '
+        + 'or postgresql://... . Do not include labels, angle brackets, or placeholder text.'
+      );
+    }
+
     if (isSupabaseDirectIpv6Issue(error)) {
       console.error(
         '[DB] Supabase direct connection resolved to IPv6 and is unreachable from this runtime. '

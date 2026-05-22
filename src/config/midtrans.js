@@ -1,6 +1,6 @@
 const axios = require('axios');
 
-const isMidtransProduction = process.env.MIDTRANS_IS_PRODUCTION === 'false'
+const isMidtransProduction = process.env.MIDTRANS_IS_PRODUCTION === 'true'
   || (process.env.MIDTRANS_IS_PRODUCTION == null && process.env.NODE_ENV === 'production');
 
 const MIDTRANS_BASE = isMidtransProduction
