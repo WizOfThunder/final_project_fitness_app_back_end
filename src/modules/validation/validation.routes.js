@@ -6,5 +6,6 @@ const roleMiddleware = require('../../middleware/role.middleware');
 
 router.get('/pending', authMiddleware, roleMiddleware('admin'), validationController.getPending);
 router.put('/:plan_id', authMiddleware, roleMiddleware('admin'), validationController.validatePlan);
+router.post('/:plan_id', authMiddleware, roleMiddleware('admin'), validationController.validatePlan);
 
 module.exports = router;

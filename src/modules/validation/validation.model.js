@@ -1,12 +1,10 @@
-const mongoose = require('mongoose');
+const { pool } = require('../../config/db');
 
-const validationLogSchema = new mongoose.Schema({
-  plan_id: { type: mongoose.Schema.Types.ObjectId, required: true },
-  plan_type: { type: String, enum: ['workout', 'diet'], required: true },
-  admin_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  action: { type: String, enum: ['verified', 'modified', 'denied'], required: true },
-  note: String,
-  created_at: { type: Date, default: Date.now }
-});
+const ValidationLog = {
+  async create(data) {
+    const [result] = await pool.query('INSERT INTO ai_validation_logs SET ?', [data]);
+    return { id: result.insertId, ...data };
+  }
+};
 
-module.exports = mongoose.model('ValidationLog', validationLogSchema);
+module.exports = ValidationLog;

@@ -65,3 +65,21 @@ npm run dev
 
 ### RANKING
 - `GET /api/ranking` - Get top users ranking
+
+### PAYMENT (Midtrans)
+- `POST /api/payment/create-transaction` - Create payment transaction
+- `POST /api/payment/midtrans-notification` - Webhook for payment notification
+- `POST /api/payment/simulate-payment` - Simulate payment (sandbox only)
+- `GET /api/payment/status/:order_id` - Get payment status
+- `GET /api/payment/my-payments` - Get my payment history
+
+### CHAT (Socket.IO)
+- `GET /api/chat/conversations` - Get all conversations
+- `GET /api/chat/conversation/:user_id` - Get conversation with user
+- `PUT /api/chat/read/:user_id` - Mark messages as read
+- Socket Events: `join`, `send_message`, `receive_message`, `typing`
+
+### NOTIFICATION (FCM)
+- `POST /api/notification/update-token` - Update FCM token
+- `POST /api/notification/send` - Send notification (admin)
+- `POST /api/notification/broadcast` - Broadcast to all users (admin)
