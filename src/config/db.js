@@ -3,7 +3,14 @@ const { Pool, types } = require('pg');
 types.setTypeParser(types.builtins.INT8, (value) => Number(value));
 types.setTypeParser(types.builtins.NUMERIC, (value) => Number(value));
 
-const DEFAULT_DB_NAME = process.env.DB_NAME || 'fitdaptive';
+const CONNECTION_STRING = process.env.DATABASE_URL
+  || process.env.POSTGRES_URL
+  || process.env.POSTGRESQL_URL;
+
+const DEFAULT_DB_NAME = process.env.DB_NAME
+  || process.env.PGDATABASE
+  || process.env.POSTGRES_DB
+  || 'fitdaptive';
 const BOOLEAN_COLUMNS = new Set([
   'gluten_free',
   'is_active',
@@ -30,25 +37,27 @@ function normalizeDataValues(data) {
 function shouldUseSsl() {
   if (process.env.DB_SSL === 'true') return true;
   if (process.env.DB_SSL === 'false') return false;
-  return Boolean(process.env.DATABASE_URL);
+  if (process.env.PGSSLMODE === 'require') return true;
+  if (process.env.PGSSLMODE === 'disable') return false;
+  return Boolean(CONNECTION_STRING || process.env.RAILWAY_ENVIRONMENT_ID);
 }
 
 function createPoolConfig() {
   const ssl = shouldUseSsl() ? { rejectUnauthorized: false } : false;
 
-  if (process.env.DATABASE_URL) {
+  if (CONNECTION_STRING) {
     return {
-      connectionString: process.env.DATABASE_URL,
+      connectionString: CONNECTION_STRING,
       max: Number(process.env.DB_POOL_SIZE || 10),
       ssl,
     };
   }
 
   return {
-    host: process.env.DB_HOST || 'localhost',
-    port: Number(process.env.DB_PORT || 5432),
-    user: process.env.DB_USER || 'postgres',
-    password: process.env.DB_PASSWORD || '',
+    host: process.env.DB_HOST || process.env.PGHOST || process.env.POSTGRES_HOST || 'localhost',
+    port: Number(process.env.DB_PORT || process.env.PGPORT || process.env.POSTGRES_PORT || 5432),
+    user: process.env.DB_USER || process.env.PGUSER || process.env.POSTGRES_USER || 'postgres',
+    password: process.env.DB_PASSWORD || process.env.PGPASSWORD || process.env.POSTGRES_PASSWORD || '',
     database: DEFAULT_DB_NAME,
     max: Number(process.env.DB_POOL_SIZE || 10),
     ssl,
