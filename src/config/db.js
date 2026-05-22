@@ -3,14 +3,36 @@ const { Pool, types } = require('pg');
 types.setTypeParser(types.builtins.INT8, (value) => Number(value));
 types.setTypeParser(types.builtins.NUMERIC, (value) => Number(value));
 
-const CONNECTION_STRING = process.env.DATABASE_URL
-  || process.env.POSTGRES_URL
-  || process.env.POSTGRESQL_URL;
+const CONNECTION_STRING_ENV_KEYS = [
+  'DATABASE_URL',
+  'DATABASE_PRIVATE_URL',
+  'DATABASE_PUBLIC_URL',
+  'POSTGRES_URL',
+  'POSTGRES_PRIVATE_URL',
+  'POSTGRES_PUBLIC_URL',
+  'POSTGRESQL_URL',
+];
 
-const DEFAULT_DB_NAME = process.env.DB_NAME
-  || process.env.PGDATABASE
-  || process.env.POSTGRES_DB
-  || 'fitdaptive';
+const DB_HOST_ENV_KEYS = ['DB_HOST', 'PGHOST', 'POSTGRES_HOST'];
+const DB_PORT_ENV_KEYS = ['DB_PORT', 'PGPORT', 'POSTGRES_PORT'];
+const DB_USER_ENV_KEYS = ['DB_USER', 'PGUSER', 'POSTGRES_USER'];
+const DB_PASSWORD_ENV_KEYS = ['DB_PASSWORD', 'PGPASSWORD', 'POSTGRES_PASSWORD'];
+const DB_NAME_ENV_KEYS = ['DB_NAME', 'PGDATABASE', 'POSTGRES_DB'];
+
+function getEnvValue(keys) {
+  for (const key of keys) {
+    const value = process.env[key];
+    if (typeof value === 'string' && value.trim() !== '') {
+      return value.trim();
+    }
+  }
+
+  return undefined;
+}
+
+const CONNECTION_STRING = getEnvValue(CONNECTION_STRING_ENV_KEYS);
+
+const DEFAULT_DB_NAME = getEnvValue(DB_NAME_ENV_KEYS) || 'fitdaptive';
 const BOOLEAN_COLUMNS = new Set([
   'gluten_free',
   'is_active',
@@ -42,29 +64,59 @@ function shouldUseSsl() {
   return Boolean(CONNECTION_STRING || process.env.RAILWAY_ENVIRONMENT_ID);
 }
 
+function isRailwayRuntime() {
+  return Boolean(
+    process.env.RAILWAY_ENVIRONMENT_ID
+    || process.env.RAILWAY_PROJECT_ID
+    || process.env.RAILWAY_SERVICE_ID
+  );
+}
+
+function hasExplicitDbConfig() {
+  return Boolean(
+    CONNECTION_STRING
+    || getEnvValue(DB_HOST_ENV_KEYS)
+    || getEnvValue(DB_PORT_ENV_KEYS)
+    || getEnvValue(DB_USER_ENV_KEYS)
+    || getEnvValue(DB_PASSWORD_ENV_KEYS)
+    || getEnvValue(DB_NAME_ENV_KEYS)
+  );
+}
+
 function createPoolConfig() {
   const ssl = shouldUseSsl() ? { rejectUnauthorized: false } : false;
 
   if (CONNECTION_STRING) {
     return {
-      connectionString: CONNECTION_STRING,
-      max: Number(process.env.DB_POOL_SIZE || 10),
-      ssl,
+      config: {
+        connectionString: CONNECTION_STRING,
+        max: Number(process.env.DB_POOL_SIZE || 10),
+        ssl,
+      },
+      source: 'connection string env',
+      isFallbackLocalhost: false,
     };
   }
 
+  const hasExplicitConfig = hasExplicitDbConfig();
+
   return {
-    host: process.env.DB_HOST || process.env.PGHOST || process.env.POSTGRES_HOST || 'localhost',
-    port: Number(process.env.DB_PORT || process.env.PGPORT || process.env.POSTGRES_PORT || 5432),
-    user: process.env.DB_USER || process.env.PGUSER || process.env.POSTGRES_USER || 'postgres',
-    password: process.env.DB_PASSWORD || process.env.PGPASSWORD || process.env.POSTGRES_PASSWORD || '',
-    database: DEFAULT_DB_NAME,
-    max: Number(process.env.DB_POOL_SIZE || 10),
-    ssl,
+    config: {
+      host: getEnvValue(DB_HOST_ENV_KEYS) || 'localhost',
+      port: Number(getEnvValue(DB_PORT_ENV_KEYS) || 5432),
+      user: getEnvValue(DB_USER_ENV_KEYS) || 'postgres',
+      password: getEnvValue(DB_PASSWORD_ENV_KEYS) || '',
+      database: DEFAULT_DB_NAME,
+      max: Number(process.env.DB_POOL_SIZE || 10),
+      ssl,
+    },
+    source: hasExplicitConfig ? 'discrete DB env vars' : 'localhost fallback',
+    isFallbackLocalhost: !hasExplicitConfig,
   };
 }
 
-const nativePool = new Pool(createPoolConfig());
+const poolSetup = createPoolConfig();
+const nativePool = new Pool(poolSetup.config);
 
 const quoteIdentifier = (value) => `"${String(value).replace(/"/g, '""')}"`;
 
@@ -167,6 +219,18 @@ const pool = {
 };
 
 const connectDB = async () => {
+  if (poolSetup.isFallbackLocalhost && (process.env.NODE_ENV === 'production' || isRailwayRuntime())) {
+    console.error(
+      '[DB] Missing PostgreSQL environment variables. '
+      + 'On Railway, add DATABASE_URL=${{Postgres.DATABASE_URL}} '
+      + 'or reference PGHOST, PGPORT, PGUSER, PGPASSWORD, and PGDATABASE '
+      + 'into the backend service variables.'
+    );
+    process.exit(1);
+  }
+
+  console.log(`[DB] Config source: ${poolSetup.source}`);
+
   try {
     const client = await nativePool.connect();
     await client.query('SELECT 1');
