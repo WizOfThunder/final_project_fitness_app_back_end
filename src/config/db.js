@@ -109,6 +109,31 @@ function getDbEnvDiagnostics() {
   };
 }
 
+function getConnectionStringEndpoint() {
+  if (!CONNECTION_STRING) return null;
+
+  try {
+    const parsed = new URL(CONNECTION_STRING);
+    return {
+      hostname: parsed.hostname,
+      port: parsed.port || '5432',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isSupabaseDirectIpv6Issue(error) {
+  const endpoint = getConnectionStringEndpoint();
+
+  return Boolean(
+    error?.code === 'ENETUNREACH'
+    && endpoint
+    && endpoint.port === '5432'
+    && /^db\..+\.supabase\.co$/i.test(endpoint.hostname)
+  );
+}
+
 function createPoolConfig() {
   const ssl = shouldUseSsl() ? { rejectUnauthorized: false } : false;
 
@@ -266,6 +291,14 @@ const connectDB = async () => {
     console.log('PostgreSQL connected');
     client.release();
   } catch (error) {
+    if (isSupabaseDirectIpv6Issue(error)) {
+      console.error(
+        '[DB] Supabase direct connection resolved to IPv6 and is unreachable from this runtime. '
+        + 'Use the Supabase Session pooler connection string for IPv4-compatible app traffic, '
+        + 'or purchase the Supabase IPv4 add-on for direct connections.'
+      );
+    }
+
     console.error('PostgreSQL connection error:', error);
     process.exit(1);
   }

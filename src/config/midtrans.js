@@ -1,6 +1,9 @@
 const axios = require('axios');
 
-const MIDTRANS_BASE = process.env.NODE_ENV === 'production'
+const isMidtransProduction = process.env.MIDTRANS_IS_PRODUCTION === 'false'
+  || (process.env.MIDTRANS_IS_PRODUCTION == null && process.env.NODE_ENV === 'production');
+
+const MIDTRANS_BASE = isMidtransProduction
   ? 'https://api.midtrans.com'
   : 'https://api.sandbox.midtrans.com';
 
