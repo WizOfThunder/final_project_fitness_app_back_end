@@ -95,6 +95,10 @@ function hasExplicitDbConfig() {
 function getDbEnvDiagnostics() {
   return {
     railwayRuntime: isRailwayRuntime(),
+    railwayProjectName: process.env.RAILWAY_PROJECT_NAME || null,
+    railwayEnvironmentName: process.env.RAILWAY_ENVIRONMENT_NAME || null,
+    railwayServiceName: process.env.RAILWAY_SERVICE_NAME || null,
+    railwayDeploymentId: process.env.RAILWAY_DEPLOYMENT_ID || null,
     nodeEnv: process.env.NODE_ENV || null,
     presentConnectionStringKeys: getPresentEnvKeys(CONNECTION_STRING_ENV_KEYS),
     presentHostKeys: getPresentEnvKeys(DB_HOST_ENV_KEYS),
