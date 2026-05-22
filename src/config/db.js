@@ -222,9 +222,11 @@ const connectDB = async () => {
   if (poolSetup.isFallbackLocalhost && (process.env.NODE_ENV === 'production' || isRailwayRuntime())) {
     console.error(
       '[DB] Missing PostgreSQL environment variables. '
-      + 'On Railway, add DATABASE_URL=${{Postgres.DATABASE_URL}} '
-      + 'or reference PGHOST, PGPORT, PGUSER, PGPASSWORD, and PGDATABASE '
-      + 'into the backend service variables.'
+      + 'If you use an external database such as Supabase, set DATABASE_URL directly '
+      + 'in the backend service variables. If you use a Railway Postgres service, '
+      + 'add DATABASE_URL=${{Postgres.DATABASE_URL}} or reference PGHOST, PGPORT, '
+      + 'PGUSER, PGPASSWORD, and PGDATABASE into the backend service variables. '
+      + 'Local .env files are not loaded in Railway deployments.'
     );
     process.exit(1);
   }
