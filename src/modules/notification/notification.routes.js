@@ -7,6 +7,7 @@ const roleMiddleware = require('../../middleware/role.middleware');
 router.get('/my', authMiddleware, notificationController.getMyNotifications);
 router.patch('/read-all', authMiddleware, notificationController.markAllRead);
 router.post('/update-token', authMiddleware, notificationController.updateFcmToken);
+router.post('/location', authMiddleware, notificationController.updateWeatherLocation);
 router.post('/send', authMiddleware, roleMiddleware('admin'), notificationController.sendNotification);
 router.post('/broadcast', authMiddleware, roleMiddleware('admin'), notificationController.sendBroadcast);
 router.post('/weather', authMiddleware, notificationController.sendWeatherNotification);

@@ -21,6 +21,37 @@ function parseNotificationData(value) {
   }
 }
 
+function parseNotificationPrefs(value) {
+  if (!value) {
+    return {};
+  }
+
+  if (typeof value === 'object') {
+    return value;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return {};
+  }
+}
+
+function parseCoordinates(body) {
+  const lat = Number(body?.lat);
+  const lon = Number(body?.lon);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return null;
+  }
+
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+    return null;
+  }
+
+  return { lat, lon };
+}
+
 exports.getMyNotifications = async (req, res) => {
   try {
     const [rows] = await pool.query(
@@ -52,6 +83,30 @@ exports.updateFcmToken = async (req, res) => {
     const { fcm_token } = req.body;
     await User.findByIdAndUpdate(req.user.id, { fcm_token });
     res.json({ message: 'FCM token updated' });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+};
+
+exports.updateWeatherLocation = async (req, res) => {
+  try {
+    const coordinates = parseCoordinates(req.body);
+    if (!coordinates) {
+      return res.status(400).json({ error: 'valid lat and lon are required' });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const prefs = parseNotificationPrefs(user.notification_prefs);
+    if (prefs.weather === false) {
+      return res.json({ message: 'Weather notifications disabled', skipped: true });
+    }
+
+    await pool.query('UPDATE users SET last_lat = ?, last_lon = ? WHERE id = ?', [coordinates.lat, coordinates.lon, req.user.id]);
+    res.json({ message: 'Weather location updated' });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -101,13 +156,13 @@ exports.testSelf = async (req, res) => {
 
 exports.sendWeatherNotification = async (req, res) => {
   try {
-    const { lat, lon } = req.body;
-    if (!lat || !lon) return res.status(400).json({ error: 'lat and lon are required' });
+    const coordinates = parseCoordinates(req.body);
+    if (!coordinates) return res.status(400).json({ error: 'valid lat and lon are required' });
 
-    await pool.query('UPDATE users SET last_lat = ?, last_lon = ? WHERE id = ?', [lat, lon, req.user.id]);
+    await pool.query('UPDATE users SET last_lat = ?, last_lon = ? WHERE id = ?', [coordinates.lat, coordinates.lon, req.user.id]);
 
     const weatherRes = await axios.get('https://api.openweathermap.org/data/2.5/weather', {
-      params: { lat, lon, appid: process.env.OPENWEATHER_API_KEY, units: 'metric' }
+      params: { lat: coordinates.lat, lon: coordinates.lon, appid: process.env.OPENWEATHER_API_KEY, units: 'metric' }
     });
 
     const advice = getWeatherAdvice(weatherRes.data);

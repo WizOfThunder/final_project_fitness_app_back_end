@@ -105,8 +105,7 @@ function startCronJobs() {
   pool.query('ALTER TABLE achievements ADD COLUMN IF NOT EXISTS icon VARCHAR(100) NULL').catch(() => {});
 
   // ── 8AM WIB daily — weather notification to all users with FCM token + location ──
-  // WIB = UTC+7, so 8AM WIB = 1AM UTC → cron: '0 1 * * *'
-  cron.schedule('0 1 * * *', async () => {
+  cron.schedule('0 8 * * *', async () => {
     console.log('[CRON] Sending morning weather notifications...');
     try {
       const [users] = await pool.query(
@@ -129,7 +128,7 @@ function startCronJobs() {
     } catch (err) {
       console.error('[CRON] Weather cron error:', err.message);
     }
-  });
+  }, { timezone: 'Asia/Jakarta' });
 
   // ── 10PM WIB daily — sync reminder + workout plan check ──
   // WIB = UTC+7, so 10PM WIB = 3PM UTC → cron: '0 15 * * *'
