@@ -11,16 +11,32 @@ const { saveNotification } = require('../modules/notification/notification.helpe
 const { reverseMidtransTransaction } = require('./midtrans');
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const WIB_TIMEZONE = 'Asia/Jakarta';
 const WIB_CURRENT_DATE_SQL = `(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Jakarta')::date`;
 
 const MIDTRANS_BASE = process.env.NODE_ENV === 'production'
   ? 'https://api.midtrans.com'
   : 'https://api.sandbox.midtrans.com';
 
+function getNowWIB() {
+  return new Date(Date.now() + 7 * 60 * 60 * 1000);
+}
+
 // Get current day name in WIB (UTC+7)
 function getTodayNameWIB() {
-  const now = new Date(Date.now() + 7 * 60 * 60 * 1000);
+  const now = getNowWIB();
   return DAY_NAMES[now.getUTCDay()];
+}
+
+function getWeekStartWIB() {
+  const now = getNowWIB();
+  const day = now.getUTCDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  const monday = new Date(now);
+  monday.setUTCDate(now.getUTCDate() + diff);
+  return monday.getUTCFullYear() + '-'
+    + String(monday.getUTCMonth() + 1).padStart(2, '0') + '-'
+    + String(monday.getUTCDate()).padStart(2, '0');
 }
 
 function parseDateOnly(value) {
@@ -128,32 +144,38 @@ function startCronJobs() {
     } catch (err) {
       console.error('[CRON] Weather cron error:', err.message);
     }
-  }, { timezone: 'Asia/Jakarta' });
+  }, { timezone: WIB_TIMEZONE });
 
   // ── 10PM WIB daily — sync reminder + workout plan check ──
-  // WIB = UTC+7, so 10PM WIB = 3PM UTC → cron: '0 15 * * *'
-  cron.schedule('0 15 * * *', async () => {
+  cron.schedule('0 22 * * *', async () => {
     console.log('[CRON] Sending evening reminders...');
     try {
       const todayName = getTodayNameWIB();
+      const weekStart = getWeekStartWIB();
       const [users] = await pool.query(
         "SELECT id, fcm_token, notification_prefs FROM users WHERE fcm_token IS NOT NULL AND fcm_token <> '' AND role = 'member'"
       );
       for (const user of users) {
         try {
           const prefs = user.notification_prefs ? JSON.parse(user.notification_prefs) : {};
-          // Check if user has workout plan items for today that are not done
-          const [pendingItems] = await pool.query(
-            `SELECT wpi.id FROM workout_plan_items wpi
-             JOIN workout_plans wp ON wp.id = wpi.workout_plan_id
-             WHERE wp.user_id = ? AND wpi.day = ? AND wpi.is_done = FALSE`,
-            [user.id, todayName]
+          // Match the app's current-week completion rules for verified workout plans.
+          const [[pendingRow]] = await pool.query(
+            `SELECT COUNT(*)::int AS pending_count
+             FROM workout_plan_items wpi
+              JOIN workout_plans wp ON wp.id = wpi.workout_plan_id
+              WHERE wp.user_id = ?
+                AND wpi.day = ?
+                AND wp.generated_by IN ('ai', 'trainer')
+                AND wp.status = 'verified'
+                AND (wpi.is_done IS DISTINCT FROM TRUE OR wpi.week_start IS NULL OR wpi.week_start <> ?)`,
+            [user.id, todayName, weekStart]
           );
+          const pendingCount = Number(pendingRow?.pending_count || 0);
 
-          if (pendingItems.length > 0) {
+          if (pendingCount > 0) {
             if (prefs.workout_reminder !== false) {
               const workoutTitle = '💪 Workout Reminder';
-              const workoutBody = `You have ${pendingItems.length} workout${pendingItems.length > 1 ? 's' : ''} left for today. Don't forget to complete them!`;
+              const workoutBody = `You have ${pendingCount} workout${pendingCount > 1 ? 's' : ''} left for today. Don't forget to complete them!`;
               await sendPushNotification(user.fcm_token, workoutTitle, workoutBody, {type: 'workout_reminder'});
               await saveNotification(user.id, workoutTitle, workoutBody, 'general');
             }
@@ -172,7 +194,7 @@ function startCronJobs() {
     } catch (err) {
       console.error('[CRON] Evening reminder cron error:', err.message);
     }
-  });
+  }, { timezone: WIB_TIMEZONE });
 
   // Runs every hour — checks expired trainer hire approvals
   cron.schedule('0 * * * *', async () => {
