@@ -51,9 +51,9 @@ const DIFFICULTY_MAP = {
 
 // Map focus areas to DB muscle keywords
 const FOCUS_MUSCLE_MAP = {
-  'Upper body': ['chest', 'biceps', 'triceps', 'shoulders', 'traps', 'lats', 'middle back', 'lower back', 'neck', 'forearms'],
+  'Upper body': ['chest', 'biceps', 'triceps', 'shoulders', 'traps', 'lats', 'lower_back', 'neck', 'forearms'],
   'Lower body': ['quadriceps', 'hamstrings', 'glutes', 'calves', 'adductors', 'abductors'],
-  'Core': ['abdominals', 'lower back'],
+  'Core': ['abdominals', 'lower_back'],
   'Full body': null,
   'Unsure': null,
 };
