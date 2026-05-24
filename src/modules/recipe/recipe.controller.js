@@ -29,6 +29,7 @@ exports.syncRecipes = async (req, res) => {
     const {
       query = '',
       number = 20,
+      offset = 0,
       diet,
       maxCalories,
       minProtein,
@@ -37,9 +38,13 @@ exports.syncRecipes = async (req, res) => {
       type
     } = req.body;
 
+    const parsedNumber = Math.max(Number.parseInt(number, 10) || 20, 1);
+    const parsedOffset = Math.max(Number.parseInt(offset, 10) || 0, 0);
+
     const params = {
       query,
-      number,
+      number: parsedNumber,
+      offset: parsedOffset,
       addRecipeNutrition: true,
       apiKey: process.env.SPOONACULAR_API_KEY
     };
