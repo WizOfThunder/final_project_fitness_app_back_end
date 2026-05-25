@@ -284,8 +284,11 @@ exports.getDashboardStats = async (req, res) => {
       `SELECT COUNT(*) AS confirmed_today FROM hire_sessions hs
        JOIN trainer_hires th ON th.id = hs.hire_id
        JOIN trainer_posts tp ON tp.id = th.post_id
-       WHERE tp.trainer_id = ? AND hs.status = 'confirmed'
-          AND (hs.member_confirmed_at AT TIME ZONE 'Asia/Jakarta')::date = ${WIB_CURRENT_DATE_SQL}`,
+       WHERE tp.trainer_id = ?
+         AND th.status IN ('active', 'enrolled')
+         AND hs.status = 'confirmed'
+         AND hs.scheduled_date = ${WIB_CURRENT_DATE_SQL}
+         AND hs.scheduled_date <= th.end_date`,
       [trainerId]
     );
 
@@ -293,7 +296,10 @@ exports.getDashboardStats = async (req, res) => {
       `SELECT COUNT(*) AS scheduled_today FROM hire_sessions hs
        JOIN trainer_hires th ON th.id = hs.hire_id
        JOIN trainer_posts tp ON tp.id = th.post_id
-        WHERE tp.trainer_id = ? AND hs.scheduled_date = ${WIB_CURRENT_DATE_SQL}`,
+        WHERE tp.trainer_id = ?
+          AND th.status IN ('active', 'enrolled')
+          AND hs.scheduled_date = ${WIB_CURRENT_DATE_SQL}
+          AND hs.scheduled_date <= th.end_date`,
       [trainerId]
     );
 
@@ -339,8 +345,18 @@ exports.getAllPostsAdmin = async (req, res) => {
 
 exports.getPost = async (req, res) => {
   try {
-    const post = await TrainerPost.findById(req.params.id);
+    const post = await TrainerPost.findById(req.params.id, req.user?.id ?? null);
     if (!post) return res.status(404).json({ error: 'Post not found' });
+
+    const isOwner = Number(post.trainer_id) === Number(req.user?.id);
+    const isAdmin = req.user?.role === 'admin';
+    const hasPrivateHireLock = Number(post.has_private_hire_lock || 0) > 0;
+    const requesterHasRelatedHire = Number(post.requester_has_related_hire || 0) > 0;
+
+    if (!isOwner && !isAdmin && hasPrivateHireLock && !requesterHasRelatedHire) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+
     const reviews = await TrainerReview.findByPost(req.params.id);
     res.json({ ...post, reviews });
   } catch (error) {
@@ -510,7 +526,7 @@ exports.deletePost = async (req, res) => {
 
 exports.hireTrainer = async (req, res) => {
   try {
-    const post = await TrainerPost.findById(req.params.id);
+    const post = await TrainerPost.findById(req.params.id, req.user?.id ?? null);
     if (!post) return res.status(404).json({ error: 'Post not found' });
     if (!post.is_active) return res.status(400).json({ error: 'This trainer is not available' });
 
@@ -531,6 +547,11 @@ exports.hireTrainer = async (req, res) => {
         ? 'You already have a pending trainer hire. Complete or resolve it before hiring another trainer.'
         : 'You already have an active subscription. End it before hiring a new trainer.';
       return res.status(400).json({ error: message });
+    }
+
+    const hasPrivateHireLock = Number(post.has_private_hire_lock || 0) > 0;
+    if (post.visibility === 'private' && hasPrivateHireLock) {
+      return res.status(400).json({ error: 'This trainer is not available right now' });
     }
 
     // Check enrollment deadline

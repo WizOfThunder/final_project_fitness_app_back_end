@@ -1,24 +1,55 @@
 const WorkoutPlan = require('./workout.model');
 const { pool } = require('../../config/db');
 
+const WIB_DATE_FORMATTER = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Jakarta',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+function formatWibDate(date) {
+  const parts = Object.fromEntries(
+    WIB_DATE_FORMATTER.formatToParts(date).map(part => [part.type, part.value]),
+  );
+
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function extractDateOnly(value) {
+  if (!value) return null;
+
+  const match = String(value).match(/^(\d{4}-\d{2}-\d{2})/);
+  if (match) return match[1];
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : formatWibDate(parsed);
+}
+
 function parseDateOnly(value) {
-  const [year, month, day] = String(value).split('-').map(Number);
+  const dateOnly = extractDateOnly(value);
+  if (!dateOnly) {
+    return null;
+  }
+
+  const [year, month, day] = dateOnly.split('-').map(Number);
   if (!year || !month || !day) {
     return null;
   }
-  return new Date(Date.UTC(year, month - 1, day));
+  return new Date(year, month - 1, day);
 }
 
 // Get monday of current week as YYYY-MM-DD
 function getWeekStart(dateValue = null) {
-  const now = parseDateOnly(dateValue) || new Date();
-  const day = now.getUTCDay();
-  const diff = (day === 0 ? -6 : 1 - day);
+  const now = parseDateOnly(dateValue) || parseDateOnly(formatWibDate(new Date()));
+  const day = now.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
   const monday = new Date(now);
-  monday.setUTCDate(now.getUTCDate() + diff);
-  return monday.getUTCFullYear() + '-' +
-    String(monday.getUTCMonth() + 1).padStart(2, '0') + '-' +
-    String(monday.getUTCDate()).padStart(2, '0');
+  monday.setDate(now.getDate() + diff);
+  return `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(
+    2,
+    '0',
+  )}-${String(monday.getDate()).padStart(2, '0')}`;
 }
 
 // GET /workout/trainer/clients — active clients of this trainer with basic activity stats
@@ -179,20 +210,18 @@ exports.toggleItem = async (req, res) => {
     const weekStart = getWeekStart(req.body?.date);
 
     const [rows] = await pool.query(
-      'SELECT is_done, week_start FROM workout_plan_items WHERE id = ?',
-      [itemId]
+      `SELECT wpi.is_done, wpi.week_start
+       FROM workout_plan_items wpi
+       JOIN workout_plans wp ON wp.id = wpi.workout_plan_id
+       WHERE wpi.id = ? AND wp.user_id = ?`,
+      [itemId, req.user.id]
     );
     if (!rows[0]) return res.status(404).json({ error: 'Item not found' });
 
     const item = rows[0];
-    let itemWeek = null;
-    if (item.week_start) {
-      const d = new Date(item.week_start);
-      itemWeek = d.getUTCFullYear() + '-' +
-        String(d.getUTCMonth() + 1).padStart(2, '0') + '-' +
-        String(d.getUTCDate()).padStart(2, '0');
-    }
-    const newDone = !item.is_done;
+    const itemWeek = extractDateOnly(item.week_start);
+    const effectiveDone = itemWeek === weekStart ? !!item.is_done : false;
+    const newDone = !effectiveDone;
 
     await pool.query(
       'UPDATE workout_plan_items SET is_done = ?, week_start = ? WHERE id = ?',

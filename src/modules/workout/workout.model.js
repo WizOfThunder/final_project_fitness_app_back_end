@@ -1,5 +1,45 @@
 const { pool } = require('../../config/db');
 
+const WIB_DATE_FORMATTER = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Jakarta',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+function formatWibDate(date) {
+  const parts = Object.fromEntries(
+    WIB_DATE_FORMATTER.formatToParts(date).map(part => [part.type, part.value]),
+  );
+
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function extractDateOnly(value) {
+  if (!value) return null;
+
+  const match = String(value).match(/^(\d{4}-\d{2}-\d{2})/);
+  if (match) return match[1];
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : formatWibDate(parsed);
+}
+
+function getWeekStart(dateValue = null) {
+  const dateOnly = extractDateOnly(dateValue) || formatWibDate(new Date());
+  const [year, month, day] = dateOnly.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  const dayOfWeek = date.getDay();
+  const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const monday = new Date(date);
+  monday.setDate(date.getDate() + diff);
+
+  return `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(
+    2,
+    '0',
+  )}-${String(monday.getDate()).padStart(2, '0')}`;
+}
+
 function safeParseJson(value) {
   if (!value) return null;
 
@@ -66,14 +106,7 @@ const WorkoutPlan = {
     return WorkoutPlan.findById(planId);
   },
   async _populate(plan) {
-    const now = new Date();
-    const day = now.getUTCDay();
-    const diff = (day === 0 ? -6 : 1 - day);
-    const monday = new Date(now);
-    monday.setUTCDate(now.getUTCDate() + diff);
-    const weekStart = monday.getUTCFullYear() + '-' +
-      String(monday.getUTCMonth() + 1).padStart(2, '0') + '-' +
-      String(monday.getUTCDate()).padStart(2, '0');
+    const weekStart = getWeekStart();
 
     const [items] = await pool.query(
       `SELECT wpi.id, wpi.day, wpi.sets, wpi.reps, wpi.duration, wpi.week_start, wpi.exercise_id,

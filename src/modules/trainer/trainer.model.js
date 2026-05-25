@@ -14,6 +14,19 @@ const WIB_DATE_FORMATTER = new Intl.DateTimeFormat('en-CA', {
   month: '2-digit',
   day: '2-digit',
 });
+const PRIVATE_POST_LOCK_HIRE_STATUSES_SQL = `'pending_payment','pending_approval','enrolled','active'`;
+
+function getPrivatePostLockSql(postAlias) {
+  return `
+    ${postAlias}.visibility = 'private'
+    AND EXISTS (
+      SELECT 1
+      FROM trainer_hires th_lock
+      WHERE th_lock.post_id = ${postAlias}.id
+        AND th_lock.status IN (${PRIVATE_POST_LOCK_HIRE_STATUSES_SQL})
+    )
+  `;
+}
 
 function formatWibDate(date) {
   const parts = Object.fromEntries(
@@ -80,16 +93,17 @@ const TrainerPost = {
           ROUND(AVG(tr.rating), 1) AS avg_rating,
           COUNT(DISTINCT tr.id) AS review_count,
           COUNT(DISTINCT CASE WHEN th.status IN ('pending_payment','pending_approval','enrolled','active') THEN th.id END) AS current_slots
-        FROM trainer_posts tp
-        JOIN users u ON u.id = tp.trainer_id
-        LEFT JOIN trainer_reviews tr ON tr.post_id = tp.id
-        LEFT JOIN trainer_hires th ON th.post_id = tp.id
-        WHERE tp.is_active = TRUE
-          AND tp.trainer_id != ?
-          AND (tp.enrollment_deadline IS NULL OR tp.enrollment_deadline >= ${WIB_CURRENT_DATE_SQL})
-          AND (tp.max_slots IS NULL OR
-               (SELECT COUNT(*) FROM trainer_hires WHERE post_id = tp.id AND status IN ('pending_payment','pending_approval','enrolled','active')) < tp.max_slots)
-         AND ? NOT IN (
+         FROM trainer_posts tp
+         JOIN users u ON u.id = tp.trainer_id
+         LEFT JOIN trainer_reviews tr ON tr.post_id = tp.id
+         LEFT JOIN trainer_hires th ON th.post_id = tp.id
+         WHERE tp.is_active = TRUE
+           AND tp.trainer_id != ?
+           AND NOT (${getPrivatePostLockSql('tp')})
+           AND (tp.enrollment_deadline IS NULL OR tp.enrollment_deadline >= ${WIB_CURRENT_DATE_SQL})
+           AND (tp.max_slots IS NULL OR
+                (SELECT COUNT(*) FROM trainer_hires WHERE post_id = tp.id AND status IN ('pending_payment','pending_approval','enrolled','active')) < tp.max_slots)
+          AND ? NOT IN (
                SELECT member_id FROM trainer_hires
                WHERE status IN ('pending_payment','pending_approval','enrolled','active')
           )
@@ -102,7 +116,7 @@ const TrainerPost = {
     );
     return rows.map(r => ({...r, schedule: r.schedule ? JSON.parse(r.schedule) : []}));
   },
-  async findById(id) {
+  async findById(id, requestingUserId = null) {
     const [[post]] = await pool.query(
       `SELECT tp.*, u.name AS trainer_name, u.avatar_url,
          u.phone_number AS trainer_phone_number,
@@ -110,19 +124,33 @@ const TrainerPost = {
          u.weight AS trainer_weight,
          u.gender AS trainer_gender,
          u.dob AS trainer_dob,
-          u.bio AS trainer_bio, u.profession AS trainer_profession,
-          u.experience_years AS trainer_experience_years,
-          u.certification AS trainer_certification,
-        ROUND(AVG(tr.rating), 1) AS avg_rating,
-        COUNT(DISTINCT tr.id) AS review_count,
-        COUNT(DISTINCT CASE WHEN th.status IN ('pending_payment','pending_approval','enrolled','active') THEN th.id END) AS current_slots
-       FROM trainer_posts tp
-       JOIN users u ON u.id = tp.trainer_id
-       LEFT JOIN trainer_reviews tr ON tr.post_id = tp.id
-       LEFT JOIN trainer_hires th ON th.post_id = tp.id
-       WHERE tp.id = ?
-       GROUP BY tp.id, u.id`,
-      [id]
+           u.bio AS trainer_bio, u.profession AS trainer_profession,
+           u.experience_years AS trainer_experience_years,
+           u.certification AS trainer_certification,
+         ROUND(AVG(tr.rating), 1) AS avg_rating,
+         COUNT(DISTINCT tr.id) AS review_count,
+         COUNT(DISTINCT CASE WHEN th.status IN ('pending_payment','pending_approval','enrolled','active') THEN th.id END) AS current_slots,
+         CASE
+           WHEN ${getPrivatePostLockSql('tp')} THEN TRUE
+           ELSE FALSE
+         END AS has_private_hire_lock,
+         CASE
+           WHEN ? IS NULL THEN FALSE
+           ELSE EXISTS (
+             SELECT 1
+             FROM trainer_hires th_requester
+             WHERE th_requester.post_id = tp.id
+               AND th_requester.member_id = ?
+               AND th_requester.status IN (${PRIVATE_POST_LOCK_HIRE_STATUSES_SQL})
+           )
+         END AS requester_has_related_hire
+        FROM trainer_posts tp
+        JOIN users u ON u.id = tp.trainer_id
+        LEFT JOIN trainer_reviews tr ON tr.post_id = tp.id
+        LEFT JOIN trainer_hires th ON th.post_id = tp.id
+        WHERE tp.id = ?
+        GROUP BY tp.id, u.id`,
+      [requestingUserId, requestingUserId, id]
     );
     if (!post) return null;
     return {...post, schedule: post.schedule ? JSON.parse(post.schedule) : []};

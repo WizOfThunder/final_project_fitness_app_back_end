@@ -51,7 +51,7 @@ const DIFFICULTY_MAP = {
 
 // Map focus areas to DB muscle keywords
 const FOCUS_MUSCLE_MAP = {
-  'Upper body': ['chest', 'biceps', 'triceps', 'shoulders', 'traps', 'lats', 'lower_back', 'neck', 'forearms'],
+  'Upper body': ['chest', 'biceps', 'triceps', 'shoulders', 'traps', 'lats', 'middle_back' 'lower_back', 'neck', 'forearms'],
   'Lower body': ['quadriceps', 'hamstrings', 'glutes', 'calves', 'adductors', 'abductors'],
   'Core': ['abdominals', 'lower_back'],
   'Full body': null,
@@ -620,7 +620,6 @@ async function runDietGeneration(userId, surveyData) {
 
   const plan = await DietPlan.create({
     user_id: userId,
-    content: '',
     status: 'draft',
     survey_input: JSON.stringify({
       goal: surveyData.goal,
