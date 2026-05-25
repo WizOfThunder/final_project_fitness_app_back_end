@@ -345,17 +345,8 @@ exports.getAllPostsAdmin = async (req, res) => {
 
 exports.getPost = async (req, res) => {
   try {
-    const post = await TrainerPost.findById(req.params.id, req.user?.id ?? null);
+    const post = await TrainerPost.findById(req.params.id);
     if (!post) return res.status(404).json({ error: 'Post not found' });
-
-    const isOwner = Number(post.trainer_id) === Number(req.user?.id);
-    const isAdmin = req.user?.role === 'admin';
-    const hasPrivateHireLock = Number(post.has_private_hire_lock || 0) > 0;
-    const requesterHasRelatedHire = Number(post.requester_has_related_hire || 0) > 0;
-
-    if (!isOwner && !isAdmin && hasPrivateHireLock && !requesterHasRelatedHire) {
-      return res.status(404).json({ error: 'Post not found' });
-    }
 
     const reviews = await TrainerReview.findByPost(req.params.id);
     res.json({ ...post, reviews });
@@ -526,7 +517,7 @@ exports.deletePost = async (req, res) => {
 
 exports.hireTrainer = async (req, res) => {
   try {
-    const post = await TrainerPost.findById(req.params.id, req.user?.id ?? null);
+    const post = await TrainerPost.findById(req.params.id);
     if (!post) return res.status(404).json({ error: 'Post not found' });
     if (!post.is_active) return res.status(400).json({ error: 'This trainer is not available' });
 
@@ -547,11 +538,6 @@ exports.hireTrainer = async (req, res) => {
         ? 'You already have a pending trainer hire. Complete or resolve it before hiring another trainer.'
         : 'You already have an active subscription. End it before hiring a new trainer.';
       return res.status(400).json({ error: message });
-    }
-
-    const hasPrivateHireLock = Number(post.has_private_hire_lock || 0) > 0;
-    if (post.visibility === 'private' && hasPrivateHireLock) {
-      return res.status(400).json({ error: 'This trainer is not available right now' });
     }
 
     // Check enrollment deadline
