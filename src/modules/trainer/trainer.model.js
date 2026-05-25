@@ -14,6 +14,7 @@ const WIB_DATE_FORMATTER = new Intl.DateTimeFormat('en-CA', {
   month: '2-digit',
   day: '2-digit',
 });
+
 function formatWibDate(date) {
   const parts = Object.fromEntries(
     WIB_DATE_FORMATTER.formatToParts(date).map((part) => [part.type, part.value])
@@ -76,20 +77,19 @@ const TrainerPost = {
          u.weight AS trainer_weight,
          u.gender AS trainer_gender,
          u.dob AS trainer_dob,
-           ROUND(AVG(tr.rating), 1) AS avg_rating,
-           COUNT(DISTINCT tr.id) AS review_count,
-           COUNT(DISTINCT CASE WHEN th.status IN ('pending_payment','pending_approval') THEN th.id END) AS pending_hire_count,
-           COUNT(DISTINCT CASE WHEN th.status IN ('pending_payment','pending_approval','enrolled','active') THEN th.id END) AS current_slots
-          FROM trainer_posts tp
-          JOIN users u ON u.id = tp.trainer_id
-          LEFT JOIN trainer_reviews tr ON tr.post_id = tp.id
-          LEFT JOIN trainer_hires th ON th.post_id = tp.id
-          WHERE tp.is_active = TRUE
-            AND tp.trainer_id != ?
-            AND (tp.enrollment_deadline IS NULL OR tp.enrollment_deadline >= ${WIB_CURRENT_DATE_SQL})
-            AND (tp.max_slots IS NULL OR
-                 (SELECT COUNT(*) FROM trainer_hires WHERE post_id = tp.id AND status IN ('pending_payment','pending_approval','enrolled','active')) < tp.max_slots)
-          AND ? NOT IN (
+          ROUND(AVG(tr.rating), 1) AS avg_rating,
+          COUNT(DISTINCT tr.id) AS review_count,
+          COUNT(DISTINCT CASE WHEN th.status IN ('pending_payment','pending_approval','enrolled','active') THEN th.id END) AS current_slots
+        FROM trainer_posts tp
+        JOIN users u ON u.id = tp.trainer_id
+        LEFT JOIN trainer_reviews tr ON tr.post_id = tp.id
+        LEFT JOIN trainer_hires th ON th.post_id = tp.id
+        WHERE tp.is_active = TRUE
+          AND tp.trainer_id != ?
+          AND (tp.enrollment_deadline IS NULL OR tp.enrollment_deadline >= ${WIB_CURRENT_DATE_SQL})
+          AND (tp.max_slots IS NULL OR
+               (SELECT COUNT(*) FROM trainer_hires WHERE post_id = tp.id AND status IN ('pending_payment','pending_approval','enrolled','active')) < tp.max_slots)
+         AND ? NOT IN (
                SELECT member_id FROM trainer_hires
                WHERE status IN ('pending_payment','pending_approval','enrolled','active')
           )
@@ -100,22 +100,7 @@ const TrainerPost = {
        GROUP BY tp.id, u.id`,
       [requestingUserId || 0, requestingUserId || 0, requestingUserId || 0]
     );
-    return rows
-      .filter(r => {
-        const pendingHireCount = Number(r.pending_hire_count || 0);
-        const currentSlots = Number(r.current_slots || 0);
-
-        if (pendingHireCount > 0) {
-          return false;
-        }
-
-        if (r.visibility === 'private' && currentSlots > 0) {
-          return false;
-        }
-
-        return true;
-      })
-      .map(r => ({...r, schedule: r.schedule ? JSON.parse(r.schedule) : []}));
+    return rows.map(r => ({...r, schedule: r.schedule ? JSON.parse(r.schedule) : []}));
   },
   async findById(id) {
     const [[post]] = await pool.query(
@@ -125,18 +110,18 @@ const TrainerPost = {
          u.weight AS trainer_weight,
          u.gender AS trainer_gender,
          u.dob AS trainer_dob,
-           u.bio AS trainer_bio, u.profession AS trainer_profession,
-           u.experience_years AS trainer_experience_years,
-           u.certification AS trainer_certification,
-          ROUND(AVG(tr.rating), 1) AS avg_rating,
-          COUNT(DISTINCT tr.id) AS review_count,
-          COUNT(DISTINCT CASE WHEN th.status IN ('pending_payment','pending_approval','enrolled','active') THEN th.id END) AS current_slots
-         FROM trainer_posts tp
-         JOIN users u ON u.id = tp.trainer_id
-         LEFT JOIN trainer_reviews tr ON tr.post_id = tp.id
-         LEFT JOIN trainer_hires th ON th.post_id = tp.id
-         WHERE tp.id = ?
-         GROUP BY tp.id, u.id`,
+          u.bio AS trainer_bio, u.profession AS trainer_profession,
+          u.experience_years AS trainer_experience_years,
+          u.certification AS trainer_certification,
+        ROUND(AVG(tr.rating), 1) AS avg_rating,
+        COUNT(DISTINCT tr.id) AS review_count,
+        COUNT(DISTINCT CASE WHEN th.status IN ('pending_payment','pending_approval','enrolled','active') THEN th.id END) AS current_slots
+       FROM trainer_posts tp
+       JOIN users u ON u.id = tp.trainer_id
+       LEFT JOIN trainer_reviews tr ON tr.post_id = tp.id
+       LEFT JOIN trainer_hires th ON th.post_id = tp.id
+       WHERE tp.id = ?
+       GROUP BY tp.id, u.id`,
       [id]
     );
     if (!post) return null;
