@@ -76,13 +76,14 @@ const TrainerPost = {
          u.weight AS trainer_weight,
          u.gender AS trainer_gender,
          u.dob AS trainer_dob,
-          ROUND(AVG(tr.rating), 1) AS avg_rating,
-          COUNT(DISTINCT tr.id) AS review_count,
-          COUNT(DISTINCT CASE WHEN th.status IN ('pending_payment','pending_approval','enrolled','active') THEN th.id END) AS current_slots
-         FROM trainer_posts tp
-         JOIN users u ON u.id = tp.trainer_id
-         LEFT JOIN trainer_reviews tr ON tr.post_id = tp.id
-         LEFT JOIN trainer_hires th ON th.post_id = tp.id
+           ROUND(AVG(tr.rating), 1) AS avg_rating,
+           COUNT(DISTINCT tr.id) AS review_count,
+           COUNT(DISTINCT CASE WHEN th.status IN ('pending_payment','pending_approval') THEN th.id END) AS pending_hire_count,
+           COUNT(DISTINCT CASE WHEN th.status IN ('pending_payment','pending_approval','enrolled','active') THEN th.id END) AS current_slots
+          FROM trainer_posts tp
+          JOIN users u ON u.id = tp.trainer_id
+          LEFT JOIN trainer_reviews tr ON tr.post_id = tp.id
+          LEFT JOIN trainer_hires th ON th.post_id = tp.id
           WHERE tp.is_active = TRUE
             AND tp.trainer_id != ?
             AND (tp.enrollment_deadline IS NULL OR tp.enrollment_deadline >= ${WIB_CURRENT_DATE_SQL})
@@ -100,7 +101,20 @@ const TrainerPost = {
       [requestingUserId || 0, requestingUserId || 0, requestingUserId || 0]
     );
     return rows
-      .filter(r => !(r.visibility === 'private' && Number(r.current_slots || 0) > 0))
+      .filter(r => {
+        const pendingHireCount = Number(r.pending_hire_count || 0);
+        const currentSlots = Number(r.current_slots || 0);
+
+        if (pendingHireCount > 0) {
+          return false;
+        }
+
+        if (r.visibility === 'private' && currentSlots > 0) {
+          return false;
+        }
+
+        return true;
+      })
       .map(r => ({...r, schedule: r.schedule ? JSON.parse(r.schedule) : []}));
   },
   async findById(id) {
