@@ -23,28 +23,7 @@ const Recipe = {
       if (!tagMap[t.recipe_id]) tagMap[t.recipe_id] = [];
       tagMap[t.recipe_id].push(t.tag);
     });
-
-    const [ingredients] = await pool.query(
-      `SELECT recipe_id, name, metric_value, metric_unit
-       FROM ingredients
-       WHERE recipe_id IN (${ids.map(() => '?').join(',')})`,
-      ids,
-    );
-    const ingredientMap = {};
-    ingredients.forEach(ingredient => {
-      if (!ingredientMap[ingredient.recipe_id]) ingredientMap[ingredient.recipe_id] = [];
-      ingredientMap[ingredient.recipe_id].push({
-        name: ingredient.name,
-        metric_value: ingredient.metric_value,
-        metric_unit: ingredient.metric_unit,
-      });
-    });
-
-    return rows.map(r => ({
-      ...r,
-      tags: tagMap[r.id] || [],
-      ingredients: ingredientMap[r.id] || [],
-    }));
+    return rows.map(r => ({...r, tags: tagMap[r.id] || []}));
   },
 
   async findById(id) {
