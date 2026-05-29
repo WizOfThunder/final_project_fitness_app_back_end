@@ -58,39 +58,1500 @@ const FOCUS_MUSCLE_MAP = {
   'Unsure': null,
 };
 
-function filterExercises(allExercises, { fitnessLevel, equipment, equipmentOther, focusAreas }) {
-  const difficulty = DIFFICULTY_MAP[fitnessLevel] || 'beginner';
+const MAX_WORKOUT_PROMPT_EXERCISES = 50;
+const MAX_DIET_PROMPT_RECIPES = 40;
+const MAX_PROMPT_TEXT_LENGTH = 120;
+const MAX_RECIPE_PROMPT_INGREDIENTS = 6;
+const MAX_RECIPE_PROMPT_TAGS = 5;
+const DEFAULT_DIET_ACTIVITY_MULTIPLIER = 1.45;
+const MAX_WORKOUT_GENERATION_ATTEMPTS = 2;
 
-  // Build allowed equipment set — ignore 'None'
-  const cleanEquipment = (equipment || []).filter(e => e !== 'None');
-  const hasGym = cleanEquipment.includes('Full gym');
-  const equipmentList = [];
-  if (!cleanEquipment.length) equipmentList.push('body only', '');
-  if (cleanEquipment.includes('Dumbbells')) equipmentList.push('dumbbell');
-  if (cleanEquipment.includes('Resistance bands')) equipmentList.push('band');
-  if (hasGym) equipmentList.push('barbell', 'cable', 'machine', 'e-z curl bar', 'ez curl', 'kettlebell', 'medicine ball', 'exercise ball', 'foam roll', 'other', 'bench', 'rack', 'pull-up', 'dip');
-  if (equipmentOther) equipmentList.push(equipmentOther.toLowerCase());
-  // always allow body-weight exercises (empty equipment)
-  equipmentList.push('');
+const WORKOUT_DAY_ORDER = [
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+  'sunday',
+];
 
-  // Build allowed muscles set — ignore 'Full body' and 'Unsure'
-  const cleanFocus = (focusAreas || []).filter(f => f !== 'Full body' && f !== 'Unsure');
-  let allowedMuscles = null;
-  if (cleanFocus.length) {
-    allowedMuscles = new Set();
-    for (const area of cleanFocus) {
-      const muscles = FOCUS_MUSCLE_MAP[area];
-      if (muscles) muscles.forEach(m => allowedMuscles.add(m));
+const WORKOUT_DURATION_MINUTES = {
+  '15 min': 15,
+  '30 min': 30,
+  '45 min': 45,
+  '60 min': 60,
+};
+
+const WORKOUT_PUSH_MUSCLES = new Set(['chest', 'shoulders', 'triceps']);
+const WORKOUT_PULL_MUSCLES = new Set([
+  'lats',
+  'middle_back',
+  'biceps',
+  'traps',
+  'forearms',
+  'neck',
+]);
+const WORKOUT_LOWER_MUSCLES = new Set([
+  'quadriceps',
+  'hamstrings',
+  'glutes',
+  'calves',
+  'adductors',
+  'abductors',
+]);
+const WORKOUT_CORE_MUSCLES = new Set(['abdominals', 'lower_back']);
+
+const WORKOUT_MOBILITY_KEYWORDS = [
+  'stretch',
+  'mobility',
+  'foam roll',
+  'yoga',
+  'cat cow',
+  'child pose',
+  'thoracic rotation',
+  'worlds greatest stretch',
+];
+
+const WORKOUT_CARDIO_KEYWORDS = [
+  'run',
+  'bike',
+  'cycle',
+  'rowing',
+  'rower',
+  'jump rope',
+  'burpee',
+  'mountain climber',
+  'high knees',
+  'sprint',
+  'skater',
+  'cardio',
+];
+
+const WORKOUT_PUSH_KEYWORDS = [
+  'press',
+  'push-up',
+  'push up',
+  'dip',
+  'fly',
+  'chest press',
+  'shoulder press',
+  'bench',
+  'tricep',
+  'lateral raise',
+  'front raise',
+];
+
+const WORKOUT_PULL_KEYWORDS = [
+  'row',
+  'pull-up',
+  'pull up',
+  'pulldown',
+  'lat',
+  'face pull',
+  'rear delt',
+  'shrug',
+  'curl',
+  'hammer curl',
+];
+
+const WORKOUT_LOWER_KEYWORDS = [
+  'squat',
+  'lunge',
+  'deadlift',
+  'hinge',
+  'leg press',
+  'leg curl',
+  'leg extension',
+  'hip thrust',
+  'glute',
+  'hamstring',
+  'quad',
+  'calf',
+  'step-up',
+  'step up',
+  'split squat',
+  'bulgarian',
+];
+
+const WORKOUT_CORE_KEYWORDS = [
+  'plank',
+  'crunch',
+  'sit-up',
+  'sit up',
+  'russian twist',
+  'hollow',
+  'dead bug',
+  'bird dog',
+  'woodchop',
+  'core',
+  'ab',
+  'oblique',
+];
+
+const WORKOUT_HIGH_IMPACT_KEYWORDS = [
+  'jump',
+  'burpee',
+  'box',
+  'hop',
+  'bounds',
+  'high knees',
+  'jump rope',
+  'skater',
+  'sprint',
+  'plyo',
+];
+
+const WORKOUT_SPINAL_LOAD_KEYWORDS = [
+  'deadlift',
+  'good morning',
+  'bent-over',
+  'bent over',
+  'barbell row',
+  'back squat',
+  'front squat',
+  'overhead press',
+  'military press',
+  'clean',
+  'snatch',
+  'thruster',
+];
+
+const WORKOUT_KNEE_STRESS_KEYWORDS = [
+  'jump',
+  'lunge',
+  'split squat',
+  'bulgarian',
+  'pistol',
+  'step-up',
+  'step up',
+  'skater',
+  'sissy squat',
+  'leg extension',
+];
+
+const WORKOUT_BALLISTIC_KEYWORDS = [
+  'clean',
+  'snatch',
+  'jerk',
+  'swing',
+  'push press',
+  'thruster',
+  'plyo',
+  'jump',
+];
+
+const WORKOUT_INTENSE_CARDIO_KEYWORDS = [
+  'sprint',
+  'burpee',
+  'jump rope',
+  'mountain climber',
+  'high knees',
+  'tabata',
+  'hiit',
+  'skater',
+];
+
+const WORKOUT_COMPOUND_KEYWORDS = [
+  'squat',
+  'deadlift',
+  'row',
+  'press',
+  'pull-up',
+  'pull up',
+  'lunge',
+  'dip',
+  'hip thrust',
+];
+
+const WORKOUT_ISOLATION_KEYWORDS = [
+  'curl',
+  'extension',
+  'raise',
+  'kickback',
+  'fly',
+  'adduction',
+  'abduction',
+  'calf raise',
+  'crunch',
+];
+
+const PREP_TIME_LIMITS = {
+  '10 - 30 minutes': 30,
+  '30 minutes - 1 hour': 60,
+  '1 hour to 2 hours': 120,
+  'No time limit': Infinity,
+};
+
+const DAIRY_INGREDIENT_KEYWORDS = [
+  'milk',
+  'cheese',
+  'butter',
+  'yogurt',
+  'ghee',
+  'whey',
+  'casein',
+  'cream cheese',
+  'heavy cream',
+  'sour cream',
+  'half and half',
+];
+
+const NUT_INGREDIENT_KEYWORDS = [
+  'almond',
+  'cashew',
+  'walnut',
+  'pecan',
+  'pistachio',
+  'hazelnut',
+  'macadamia',
+  'peanut',
+  'nut',
+];
+
+const GLUTEN_INGREDIENT_KEYWORDS = [
+  'wheat',
+  'flour',
+  'bread',
+  'breadcrumbs',
+  'barley',
+  'rye',
+  'seitan',
+  'soy sauce',
+  'pasta',
+  'noodle',
+  'cracker',
+];
+
+function normalizeGoal(value) {
+  const goal = String(value || '').trim().toLowerCase();
+
+  if (goal.includes('weight')) return 'weight_loss';
+  if (goal.includes('muscle')) return 'muscle_gain';
+  if (goal.includes('endur')) return 'improve_endurance';
+  if (goal.includes('recover')) return 'recovery';
+  if (goal.includes('maint')) return 'maintenance';
+  if (goal.includes('health')) return 'eat_healthier';
+  if (goal.includes('active')) return 'stay_active';
+
+  return 'general';
+}
+
+function normalizeText(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeTextLower(value) {
+  return normalizeText(value).toLowerCase();
+}
+
+function toFiniteNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function truncateText(value, maxLength = MAX_PROMPT_TEXT_LENGTH) {
+  const text = normalizeText(value).replace(/\s+/g, ' ');
+  if (!text) return '';
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength - 3)}...`;
+}
+
+function getAllowedMuscles(focusAreas = []) {
+  const cleanFocus = (focusAreas || []).filter(
+    focus => focus !== 'Full body' && focus !== 'Unsure',
+  );
+
+  if (!cleanFocus.length) {
+    return null;
+  }
+
+  const allowedMuscles = new Set();
+  for (const area of cleanFocus) {
+    const muscles = FOCUS_MUSCLE_MAP[area];
+    if (muscles) {
+      muscles.forEach(muscle => allowedMuscles.add(muscle));
     }
   }
+
+  return allowedMuscles.size ? allowedMuscles : null;
+}
+
+function getSelectedEquipmentTokens(equipment = [], equipmentOther = '') {
+  const cleanEquipment = (equipment || []).filter(item => item !== 'None');
+  const hasGym = cleanEquipment.includes('Full gym');
+  const tokens = new Set();
+
+  if (!cleanEquipment.length) {
+    tokens.add('body only');
+    tokens.add('bodyweight');
+  }
+  if (cleanEquipment.includes('Dumbbells')) tokens.add('dumbbell');
+  if (cleanEquipment.includes('Resistance bands')) tokens.add('band');
+  if (hasGym) {
+    [
+      'barbell',
+      'cable',
+      'machine',
+      'ez curl',
+      'e-z curl',
+      'kettlebell',
+      'medicine ball',
+      'exercise ball',
+      'foam roll',
+      'bench',
+      'rack',
+      'pull-up',
+      'dip',
+      'smith',
+      'sled',
+    ].forEach(token => tokens.add(token));
+  }
+
+  const customEquipment = normalizeTextLower(equipmentOther);
+  if (customEquipment) {
+    tokens.add(customEquipment);
+  }
+
+  tokens.add('');
+  return tokens;
+}
+
+function getWorkoutPlanDays(input = {}) {
+  if (Array.isArray(input.days) && input.days.length > 0) {
+    const planDaySet = new Set(
+      input.days.map(normalizeTextLower).filter(day => WORKOUT_DAY_ORDER.includes(day)),
+    );
+    const planDays = WORKOUT_DAY_ORDER.filter(day => planDaySet.has(day));
+
+    if (planDays.length > 0) {
+      return planDays;
+    }
+  }
+
+  return WORKOUT_DAY_ORDER.slice(0, 5);
+}
+
+function getWorkoutDurationMinutes(duration) {
+  return WORKOUT_DURATION_MINUTES[duration] || 45;
+}
+
+function textIncludesAny(text, keywords = []) {
+  return keywords.some(keyword => text.includes(keyword));
+}
+
+function buildExerciseSearchText(exercise = {}) {
+  return [
+    exercise.name,
+    exercise.type,
+    exercise.muscle,
+    exercise.equipment,
+    exercise.instructions,
+    exercise.safety_info,
+  ]
+    .map(normalizeTextLower)
+    .filter(Boolean)
+    .join(' ');
+}
+
+function getExerciseProfile(exercise = {}) {
+  const text = buildExerciseSearchText(exercise);
+  const muscle = normalizeTextLower(exercise.muscle);
+  const mobility =
+    normalizeTextLower(exercise.type).includes('stretch')
+    || normalizeTextLower(exercise.type).includes('mobility')
+    || textIncludesAny(text, WORKOUT_MOBILITY_KEYWORDS);
+  const cardio =
+    normalizeTextLower(exercise.type).includes('cardio')
+    || textIncludesAny(text, WORKOUT_CARDIO_KEYWORDS);
+
+  let pattern = 'accessory';
+  if (mobility) {
+    pattern = 'mobility';
+  } else if (cardio) {
+    pattern = 'cardio';
+  } else if (
+    textIncludesAny(text, WORKOUT_LOWER_KEYWORDS)
+    || WORKOUT_LOWER_MUSCLES.has(muscle)
+  ) {
+    pattern = 'lower';
+  } else if (
+    textIncludesAny(text, WORKOUT_PUSH_KEYWORDS)
+    || WORKOUT_PUSH_MUSCLES.has(muscle)
+  ) {
+    pattern = 'push';
+  } else if (
+    textIncludesAny(text, WORKOUT_PULL_KEYWORDS)
+    || WORKOUT_PULL_MUSCLES.has(muscle)
+  ) {
+    pattern = 'pull';
+  } else if (
+    textIncludesAny(text, WORKOUT_CORE_KEYWORDS)
+    || WORKOUT_CORE_MUSCLES.has(muscle)
+  ) {
+    pattern = 'core';
+  }
+
+  const riskFlags = new Set();
+  if (textIncludesAny(text, WORKOUT_HIGH_IMPACT_KEYWORDS)) {
+    riskFlags.add('high_impact');
+  }
+  if (textIncludesAny(text, WORKOUT_SPINAL_LOAD_KEYWORDS)) {
+    riskFlags.add('spinal_load');
+  }
+  if (textIncludesAny(text, WORKOUT_KNEE_STRESS_KEYWORDS)) {
+    riskFlags.add('knee_stress');
+  }
+  if (textIncludesAny(text, WORKOUT_BALLISTIC_KEYWORDS)) {
+    riskFlags.add('ballistic');
+  }
+  if (
+    textIncludesAny(text, WORKOUT_INTENSE_CARDIO_KEYWORDS)
+    || (cardio && riskFlags.has('high_impact'))
+  ) {
+    riskFlags.add('intense_cardio');
+  }
+
+  const isCompound =
+    ['push', 'pull', 'lower'].includes(pattern)
+    && (
+      textIncludesAny(text, WORKOUT_COMPOUND_KEYWORDS)
+      || !textIncludesAny(text, WORKOUT_ISOLATION_KEYWORDS)
+    );
+
+  return {
+    pattern,
+    riskFlags,
+    isCompound,
+  };
+}
+
+function buildWorkoutSafetyContext(surveyData = {}) {
+  const conditions = new Set(
+    (surveyData.healthConditions || [])
+      .map(normalizeTextLower)
+      .filter(value => value && value !== 'none'),
+  );
+  const medicationFactors = new Set(
+    (surveyData.medicationFactors || [])
+      .map(normalizeTextLower)
+      .filter(value => value && value !== 'no' && value !== 'prefer not to say'),
+  );
+  const goalKey = normalizeGoal(surveyData.goal);
+
+  return {
+    conditions,
+    medicationFactors,
+    goalKey,
+    avoidHighImpact:
+      conditions.has('back pain')
+      || conditions.has('knee issues')
+      || medicationFactors.has('stimulant medication')
+      || medicationFactors.has('blood pressure / heart medication')
+      || goalKey === 'recovery',
+    avoidSpinalLoad: conditions.has('back pain'),
+    avoidKneeStress: conditions.has('knee issues'),
+    avoidIntenseConditioning:
+      medicationFactors.has('stimulant medication')
+      || medicationFactors.has('blood pressure / heart medication')
+      || goalKey === 'recovery',
+    avoidBallistic:
+      conditions.has('back pain')
+      || conditions.has('knee issues')
+      || goalKey === 'recovery',
+  };
+}
+
+function hasWorkoutSafetyRestrictions(safetyContext) {
+  return (
+    safetyContext.avoidHighImpact
+    || safetyContext.avoidSpinalLoad
+    || safetyContext.avoidKneeStress
+    || safetyContext.avoidIntenseConditioning
+    || safetyContext.avoidBallistic
+  );
+}
+
+function violatesWorkoutSafety(profile, safetyContext, mode = 'strict') {
+  if (safetyContext.avoidHighImpact && profile.riskFlags.has('high_impact')) {
+    return true;
+  }
+  if (safetyContext.avoidSpinalLoad && profile.riskFlags.has('spinal_load')) {
+    return true;
+  }
+  if (safetyContext.avoidIntenseConditioning && profile.riskFlags.has('intense_cardio')) {
+    return true;
+  }
+  if (mode === 'strict') {
+    if (safetyContext.avoidKneeStress && profile.riskFlags.has('knee_stress')) {
+      return true;
+    }
+    if (safetyContext.avoidBallistic && profile.riskFlags.has('ballistic')) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function applyWorkoutSafetyFilters(exercises, surveyData) {
+  const safetyContext = buildWorkoutSafetyContext(surveyData);
+  if (!hasWorkoutSafetyRestrictions(safetyContext)) {
+    return exercises;
+  }
+
+  const minimumUsefulCount = Math.max(
+    12,
+    getWorkoutPlanDays(surveyData).length * 4,
+  );
+  const strict = exercises.filter(
+    exercise => !violatesWorkoutSafety(getExerciseProfile(exercise), safetyContext),
+  );
+  if (strict.length >= Math.min(exercises.length, minimumUsefulCount)) {
+    return strict;
+  }
+
+  const relaxed = exercises.filter(
+    exercise =>
+      !violatesWorkoutSafety(getExerciseProfile(exercise), safetyContext, 'relaxed'),
+  );
+
+  return relaxed.length ? relaxed : strict;
+}
+
+function hasWorkoutHealthOrMedicationConstraints(surveyData = {}) {
+  const hasHealthConditions = (surveyData.healthConditions || []).some(
+    value => normalizeTextLower(value) && normalizeTextLower(value) !== 'none',
+  );
+  const hasMedicationFactors = (surveyData.medicationFactors || []).some(
+    value => {
+      const normalized = normalizeTextLower(value);
+      return normalized && normalized !== 'no' && normalized !== 'prefer not to say';
+    },
+  );
+
+  return hasHealthConditions || hasMedicationFactors;
+}
+
+function getWorkoutSessionBudget(duration, label = '') {
+  const targetMinutes = getWorkoutDurationMinutes(duration);
+  let minExercises = 4;
+  let maxExercises = 5;
+
+  if (targetMinutes <= 15) {
+    minExercises = 3;
+    maxExercises = 3;
+  } else if (targetMinutes <= 30) {
+    minExercises = 3;
+    maxExercises = 4;
+  }
+
+  if (label.toLowerCase().includes('recovery')) {
+    minExercises = Math.min(minExercises, 3);
+    maxExercises = Math.min(maxExercises, 4);
+  }
+
+  return {
+    targetMinutes,
+    minExercises,
+    maxExercises,
+    minMinutes:
+      targetMinutes <= 15
+        ? 8
+        : targetMinutes <= 30
+        ? 16
+        : Math.max(22, targetMinutes - 12),
+    maxMinutes: targetMinutes + (targetMinutes <= 30 ? 8 : 12),
+  };
+}
+
+function buildWorkoutDaySpec(day, label, config, surveyData) {
+  const focusAreas = surveyData.focusAreas || [];
+  const goalKey = normalizeGoal(surveyData.goal);
+  const budget = getWorkoutSessionBudget(surveyData.duration, label);
+  const notes = [];
+
+  if (
+    focusAreas.includes('Core')
+    && !config.minPatternCounts?.core
+    && !label.toLowerCase().includes('core')
+  ) {
+    notes.push('add one core finisher if time allows');
+  }
+  if (
+    focusAreas.includes('Upper body')
+    && ['upper', 'push', 'pull', 'full body'].some(token =>
+      label.toLowerCase().includes(token),
+    )
+  ) {
+    notes.push('slightly bias effort toward upper-body emphasis');
+  }
+  if (
+    focusAreas.includes('Lower body')
+    && label.toLowerCase().includes('lower')
+  ) {
+    notes.push('slightly bias effort toward lower-body emphasis');
+  }
+  if (goalKey === 'recovery') {
+    notes.push('keep tempo controlled and low impact');
+  }
+
+  return {
+    day,
+    label,
+    minPatternCounts: config.minPatternCounts || {},
+    requiredAnyPatternGroups: config.requiredAnyPatternGroups || [],
+    preferredPatternCounts: config.preferredPatternCounts || {},
+    maxPatternCounts: config.maxPatternCounts || {},
+    minDistinctPatterns: config.minDistinctPatterns || 1,
+    notes,
+    ...budget,
+  };
+}
+
+function buildWorkoutSplitPlan(planDays, surveyData) {
+  const dayCount = planDays.length;
+  const goalKey = normalizeGoal(surveyData.goal);
+  const templates = [];
+
+  if (dayCount <= 1) {
+    templates.push({
+      label: 'Full Body',
+      minPatternCounts: {lower: 1},
+      requiredAnyPatternGroups: [['push', 'pull']],
+      preferredPatternCounts: {core: 1},
+      maxPatternCounts: {lower: 2, push: 2, pull: 2, core: 2, cardio: 1},
+      minDistinctPatterns: 2,
+    });
+  } else if (dayCount === 2) {
+    templates.push(
+      {
+        label: 'Upper',
+        minPatternCounts: {push: 1, pull: 1},
+        preferredPatternCounts: {core: 1},
+        maxPatternCounts: {push: 3, pull: 3, lower: 1, core: 2},
+        minDistinctPatterns: 2,
+      },
+      {
+        label: 'Lower + Core',
+        minPatternCounts: {lower: 2},
+        preferredPatternCounts: {core: 1},
+        maxPatternCounts: {lower: 3, core: 2, push: 1, pull: 1},
+        minDistinctPatterns: 2,
+      },
+    );
+  } else if (dayCount === 3) {
+    if (goalKey === 'muscle_gain') {
+      templates.push(
+        {
+          label: 'Push',
+          minPatternCounts: {push: 2},
+          preferredPatternCounts: {core: 1},
+          requiredAnyPatternGroups: [['pull', 'core']],
+          maxPatternCounts: {push: 3, pull: 1, core: 2, lower: 1},
+          minDistinctPatterns: 2,
+        },
+        {
+          label: 'Legs + Core',
+          minPatternCounts: {lower: 2},
+          preferredPatternCounts: {core: 1},
+          maxPatternCounts: {lower: 3, core: 2, push: 1, pull: 1},
+          minDistinctPatterns: 2,
+        },
+        {
+          label: 'Pull',
+          minPatternCounts: {pull: 2},
+          preferredPatternCounts: {core: 1},
+          requiredAnyPatternGroups: [['push', 'core']],
+          maxPatternCounts: {pull: 3, push: 1, core: 2, lower: 1},
+          minDistinctPatterns: 2,
+        },
+      );
+    } else {
+      templates.push(
+        {
+          label: 'Full Body',
+          minPatternCounts: {lower: 1},
+          requiredAnyPatternGroups: [['push', 'pull']],
+          preferredPatternCounts: {core: 1},
+          maxPatternCounts: {lower: 2, push: 2, pull: 2, core: 2},
+          minDistinctPatterns: 3,
+        },
+        {
+          label: 'Lower + Core',
+          minPatternCounts: {lower: 2},
+          preferredPatternCounts: {core: 1},
+          maxPatternCounts: {lower: 3, core: 2, push: 1, pull: 1},
+          minDistinctPatterns: 2,
+        },
+        {
+          label: 'Upper',
+          minPatternCounts: {push: 1, pull: 1},
+          preferredPatternCounts: {core: 1},
+          maxPatternCounts: {push: 3, pull: 3, lower: 1, core: 2},
+          minDistinctPatterns: 2,
+        },
+      );
+    }
+  } else if (dayCount === 4) {
+    templates.push(
+      {
+        label: 'Upper',
+        minPatternCounts: {push: 1, pull: 1},
+        preferredPatternCounts: {core: 1},
+        maxPatternCounts: {push: 3, pull: 3, lower: 1, core: 2},
+        minDistinctPatterns: 2,
+      },
+      {
+        label: 'Lower + Core',
+        minPatternCounts: {lower: 2},
+        preferredPatternCounts: {core: 1},
+        maxPatternCounts: {lower: 3, core: 2, push: 1, pull: 1},
+        minDistinctPatterns: 2,
+      },
+      {
+        label: 'Upper',
+        minPatternCounts: {push: 1, pull: 1},
+        preferredPatternCounts: {core: 1},
+        maxPatternCounts: {push: 3, pull: 3, lower: 1, core: 2},
+        minDistinctPatterns: 2,
+      },
+      {
+        label: 'Lower + Core',
+        minPatternCounts: {lower: 2},
+        preferredPatternCounts: {core: 1},
+        maxPatternCounts: {lower: 3, core: 2, push: 1, pull: 1},
+        minDistinctPatterns: 2,
+      },
+    );
+  } else if (dayCount === 5) {
+    templates.push(
+      {
+        label: 'Push',
+        minPatternCounts: {push: 2},
+        preferredPatternCounts: {core: 1},
+        requiredAnyPatternGroups: [['pull', 'core']],
+        maxPatternCounts: {push: 3, pull: 1, core: 2, lower: 1},
+        minDistinctPatterns: 2,
+      },
+      {
+        label: 'Pull',
+        minPatternCounts: {pull: 2},
+        preferredPatternCounts: {core: 1},
+        requiredAnyPatternGroups: [['push', 'core']],
+        maxPatternCounts: {pull: 3, push: 1, core: 2, lower: 1},
+        minDistinctPatterns: 2,
+      },
+      {
+        label: 'Legs + Core',
+        minPatternCounts: {lower: 2},
+        preferredPatternCounts: {core: 1},
+        maxPatternCounts: {lower: 3, core: 2, push: 1, pull: 1},
+        minDistinctPatterns: 2,
+      },
+      {
+        label: 'Upper',
+        minPatternCounts: {push: 1, pull: 1},
+        preferredPatternCounts: {core: 1},
+        maxPatternCounts: {push: 3, pull: 3, lower: 1, core: 2},
+        minDistinctPatterns: 2,
+      },
+      {
+        label: 'Lower + Core',
+        minPatternCounts: {lower: 2},
+        preferredPatternCounts: {core: 1},
+        maxPatternCounts: {lower: 3, core: 2, push: 1, pull: 1},
+        minDistinctPatterns: 2,
+      },
+    );
+  } else if (dayCount === 6) {
+    templates.push(
+      {
+        label: 'Push',
+        minPatternCounts: {push: 2},
+        preferredPatternCounts: {core: 1},
+        requiredAnyPatternGroups: [['pull', 'core']],
+        maxPatternCounts: {push: 3, pull: 1, core: 2, lower: 1},
+        minDistinctPatterns: 2,
+      },
+      {
+        label: 'Pull',
+        minPatternCounts: {pull: 2},
+        preferredPatternCounts: {core: 1},
+        requiredAnyPatternGroups: [['push', 'core']],
+        maxPatternCounts: {pull: 3, push: 1, core: 2, lower: 1},
+        minDistinctPatterns: 2,
+      },
+      {
+        label: 'Legs + Core',
+        minPatternCounts: {lower: 2},
+        preferredPatternCounts: {core: 1},
+        maxPatternCounts: {lower: 3, core: 2, push: 1, pull: 1},
+        minDistinctPatterns: 2,
+      },
+      {
+        label: 'Push',
+        minPatternCounts: {push: 2},
+        preferredPatternCounts: {core: 1},
+        requiredAnyPatternGroups: [['pull', 'core']],
+        maxPatternCounts: {push: 3, pull: 1, core: 2, lower: 1},
+        minDistinctPatterns: 2,
+      },
+      {
+        label: 'Pull',
+        minPatternCounts: {pull: 2},
+        preferredPatternCounts: {core: 1},
+        requiredAnyPatternGroups: [['push', 'core']],
+        maxPatternCounts: {pull: 3, push: 1, core: 2, lower: 1},
+        minDistinctPatterns: 2,
+      },
+      {
+        label: 'Legs + Core',
+        minPatternCounts: {lower: 2},
+        preferredPatternCounts: {core: 1},
+        maxPatternCounts: {lower: 3, core: 2, push: 1, pull: 1},
+        minDistinctPatterns: 2,
+      },
+    );
+  } else {
+    templates.push(
+      {
+        label: 'Push',
+        minPatternCounts: {push: 2},
+        preferredPatternCounts: {core: 1},
+        requiredAnyPatternGroups: [['pull', 'core']],
+        maxPatternCounts: {push: 3, pull: 1, core: 2, lower: 1},
+        minDistinctPatterns: 2,
+      },
+      {
+        label: 'Pull',
+        minPatternCounts: {pull: 2},
+        preferredPatternCounts: {core: 1},
+        requiredAnyPatternGroups: [['push', 'core']],
+        maxPatternCounts: {pull: 3, push: 1, core: 2, lower: 1},
+        minDistinctPatterns: 2,
+      },
+      {
+        label: 'Legs + Core',
+        minPatternCounts: {lower: 2},
+        preferredPatternCounts: {core: 1},
+        maxPatternCounts: {lower: 3, core: 2, push: 1, pull: 1},
+        minDistinctPatterns: 2,
+      },
+      {
+        label: 'Upper',
+        minPatternCounts: {push: 1, pull: 1},
+        preferredPatternCounts: {core: 1},
+        maxPatternCounts: {push: 3, pull: 3, lower: 1, core: 2},
+        minDistinctPatterns: 2,
+      },
+      {
+        label: 'Lower + Core',
+        minPatternCounts: {lower: 2},
+        preferredPatternCounts: {core: 1},
+        maxPatternCounts: {lower: 3, core: 2, push: 1, pull: 1},
+        minDistinctPatterns: 2,
+      },
+      {
+        label: 'Full Body',
+        minPatternCounts: {lower: 1},
+        requiredAnyPatternGroups: [['push', 'pull']],
+        preferredPatternCounts: {core: 1},
+        maxPatternCounts: {lower: 2, push: 2, pull: 2, core: 2},
+        minDistinctPatterns: 3,
+      },
+      {
+        label: 'Recovery + Core',
+        minPatternCounts: {core: 1},
+        requiredAnyPatternGroups: [['mobility', 'cardio', 'push', 'pull', 'lower']],
+        preferredPatternCounts: {mobility: 1},
+        maxPatternCounts: {core: 2, mobility: 2, cardio: 2, push: 1, pull: 1, lower: 1},
+        minDistinctPatterns: 2,
+      },
+    );
+  }
+
+  return planDays.map((day, index) =>
+    buildWorkoutDaySpec(day, templates[index].label, templates[index], surveyData),
+  );
+}
+
+function formatWorkoutSplitPlan(splitPlan) {
+  return splitPlan.map(spec => {
+    const hardRequirements = Object.entries(spec.minPatternCounts)
+      .map(([pattern, count]) => `${count}+ ${pattern}`)
+      .join(', ');
+    const anyRequirements = spec.requiredAnyPatternGroups
+      .map(group => `include at least 1 of ${group.join(' / ')}`)
+      .join('; ');
+    const requiredText = [hardRequirements || 'balanced mix', anyRequirements]
+      .filter(Boolean)
+      .join('; ');
+
+    return `- ${formatPlanDay(spec.day)}: ${spec.label} | ${spec.minExercises}-${spec.maxExercises} exercises | target ${spec.targetMinutes} min | required: ${requiredText}`;
+  }).join('\n');
+}
+
+function estimateWorkoutItemMinutes(item, exercise, fitnessLevel) {
+  const profile = getExerciseProfile(exercise);
+  const sets = Math.max(parseInt(item.sets, 10) || 1, 1);
+  const reps = Math.max(parseInt(item.reps, 10) || 0, 0);
+  const durationSeconds = Math.max(parseInt(item.duration, 10) || 0, 0);
+  const activeMinutes = durationSeconds > 0
+    ? (sets * durationSeconds) / 60
+    : (sets * Math.max(reps, 8) * (profile.pattern === 'mobility' ? 4 : 3)) / 60;
+
+  let restSeconds = 45;
+  if (profile.pattern === 'mobility') restSeconds = 20;
+  else if (profile.pattern === 'core') restSeconds = 30;
+  else if (profile.pattern === 'cardio') restSeconds = 25;
+  else if (profile.isCompound) {
+    restSeconds = normalizeTextLower(fitnessLevel) === 'advanced' ? 75 : 60;
+  } else if (normalizeTextLower(fitnessLevel) === 'advanced') {
+    restSeconds = 55;
+  }
+
+  const setupMinutes = 0.4 * sets;
+  const restMinutes = (Math.max(sets - 1, 0) * restSeconds) / 60;
+  return activeMinutes + setupMinutes + restMinutes;
+}
+
+function validateWorkoutPlan(items, exercisesById, splitPlan, surveyData) {
+  const errors = [];
+  const grouped = new Map();
+  const dayOrder = splitPlan.map(spec => spec.day);
+  const selectedDaySet = new Set(dayOrder);
+  const exerciseUsage = new Map();
+
+  for (const item of items) {
+    const dayKey = normalizeTextLower(item.day);
+    if (!selectedDaySet.has(dayKey)) {
+      continue;
+    }
+    if (!grouped.has(dayKey)) {
+      grouped.set(dayKey, []);
+    }
+    grouped.get(dayKey).push(item);
+    exerciseUsage.set(
+      item.exercise_id,
+      (exerciseUsage.get(item.exercise_id) || 0) + 1,
+    );
+  }
+
+  for (const spec of splitPlan) {
+    const dayItems = grouped.get(spec.day) || [];
+    if (dayItems.length === 0) {
+      errors.push(`${formatPlanDay(spec.day)} is missing entirely.`);
+      continue;
+    }
+
+    if (
+      dayItems.length < spec.minExercises
+      || dayItems.length > spec.maxExercises
+    ) {
+      errors.push(
+        `${formatPlanDay(spec.day)} must contain ${spec.minExercises}-${spec.maxExercises} exercises.`,
+      );
+    }
+
+    const patternCounts = {};
+    const distinctPatterns = new Set();
+    const seenExercises = new Set();
+    let estimatedMinutes = 0;
+
+    for (const item of dayItems) {
+      const exercise = exercisesById.get(item.exercise_id);
+      if (!exercise) {
+        errors.push(`${formatPlanDay(spec.day)} contains an invalid exercise id.`);
+        continue;
+      }
+
+      if (seenExercises.has(item.exercise_id)) {
+        errors.push(
+          `${formatPlanDay(spec.day)} repeats the same exercise more than once.`,
+        );
+      }
+      seenExercises.add(item.exercise_id);
+
+      const profile = getExerciseProfile(exercise);
+      patternCounts[profile.pattern] = (patternCounts[profile.pattern] || 0) + 1;
+      distinctPatterns.add(profile.pattern);
+      estimatedMinutes += estimateWorkoutItemMinutes(
+        item,
+        exercise,
+        surveyData.fitnessLevel,
+      );
+
+      if (item.reps && item.duration) {
+        errors.push(
+          `${formatPlanDay(spec.day)} has an exercise with both reps and timed duration set.`,
+        );
+      }
+      if (!item.reps && !item.duration) {
+        errors.push(
+          `${formatPlanDay(spec.day)} has an exercise without reps or timed duration.`,
+        );
+      }
+    }
+
+    for (const [pattern, count] of Object.entries(spec.minPatternCounts)) {
+      if ((patternCounts[pattern] || 0) < count) {
+        errors.push(
+          `${formatPlanDay(spec.day)} needs at least ${count} ${pattern} exercise(s).`,
+        );
+      }
+    }
+
+    for (const group of spec.requiredAnyPatternGroups) {
+      const hasAny = group.some(pattern => (patternCounts[pattern] || 0) > 0);
+      if (!hasAny) {
+        errors.push(
+          `${formatPlanDay(spec.day)} must include at least one of: ${group.join(', ')}.`,
+        );
+      }
+    }
+
+    for (const [pattern, maxCount] of Object.entries(spec.maxPatternCounts)) {
+      if ((patternCounts[pattern] || 0) > maxCount) {
+        errors.push(
+          `${formatPlanDay(spec.day)} has too many ${pattern} exercises.`,
+        );
+      }
+    }
+
+    if (distinctPatterns.size < spec.minDistinctPatterns) {
+      errors.push(
+        `${formatPlanDay(spec.day)} needs more movement-pattern variety.`,
+      );
+    }
+
+    if (
+      estimatedMinutes < spec.minMinutes
+      || estimatedMinutes > spec.maxMinutes
+    ) {
+      errors.push(
+        `${formatPlanDay(spec.day)} is outside the ${spec.targetMinutes}-minute session budget.`,
+      );
+    }
+  }
+
+  for (const [exerciseId, count] of exerciseUsage.entries()) {
+    if (count > 2) {
+      const exercise = exercisesById.get(exerciseId);
+      errors.push(
+        `${normalizeText(exercise?.name) || `Exercise ${exerciseId}`} is repeated too often across the week.`,
+      );
+    }
+  }
+
+  for (let index = 0; index < dayOrder.length - 1; index += 1) {
+    const currentDayItems = grouped.get(dayOrder[index]) || [];
+    const nextDayItems = grouped.get(dayOrder[index + 1]) || [];
+    const nextIds = new Set(nextDayItems.map(item => item.exercise_id));
+    const repeatedNextDay = currentDayItems.some(item => nextIds.has(item.exercise_id));
+    if (repeatedNextDay) {
+      errors.push(
+        `${formatPlanDay(dayOrder[index])} and ${formatPlanDay(dayOrder[index + 1])} repeat the same exercise on consecutive days.`,
+      );
+    }
+  }
+
+  return {
+    isValid: errors.length === 0,
+    errors: Array.from(new Set(errors)).slice(0, 8),
+  };
+}
+
+function getRecipeIngredientNames(recipe = {}) {
+  return Array.isArray(recipe.ingredients)
+    ? recipe.ingredients
+        .map(ingredient => normalizeText(ingredient?.name))
+        .filter(Boolean)
+    : [];
+}
+
+function buildIngredientSearchText(recipe = {}) {
+  const ingredientText = getRecipeIngredientNames(recipe).join(' ').toLowerCase();
+  return ingredientText || normalizeTextLower(recipe.title);
+}
+
+function matchesIngredientKeyword(text, keyword) {
+  if (!text || !keyword) {
+    return false;
+  }
+
+  const escapedKeyword = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escapedKeyword}\\b`, 'i').test(text);
+}
+
+function matchesAnyIngredientKeyword(text, keywords = []) {
+  return keywords.some(keyword => matchesIngredientKeyword(text, keyword));
+}
+
+function getCustomAllergyKeywords(value) {
+  return normalizeText(value)
+    .split(/[\n,;/]+/)
+    .map(term => term.trim().toLowerCase())
+    .filter(term => term.length >= 3);
+}
+
+function parsePrepTimeLimit(prepTime) {
+  return PREP_TIME_LIMITS[prepTime] ?? Infinity;
+}
+
+function calculateDietTargets(user, goal, mealsPerDay) {
+  const goalKey = normalizeGoal(goal || user?.goal);
+  const weightKg = toFiniteNumber(user?.weight);
+  const heightCm = toFiniteNumber(user?.height);
+  const age = calcAge(user?.dob);
+  const gender = normalizeTextLower(user?.gender);
+  const mealsCount = Math.max(parseInt(mealsPerDay, 10) || 3, 1);
+
+  let maintenanceCalories = null;
+  if (weightKg && heightCm && age && ['male', 'female'].includes(gender)) {
+    const sexOffset = gender === 'male' ? 5 : -161;
+    const bmr = 10 * weightKg + 6.25 * heightCm - 5 * age + sexOffset;
+    maintenanceCalories = Math.round(bmr * DEFAULT_DIET_ACTIVITY_MULTIPLIER);
+  } else if (weightKg) {
+    maintenanceCalories = Math.round(weightKg * 31);
+  }
+
+  let dailyCalories = maintenanceCalories;
+  if (dailyCalories) {
+    if (goalKey === 'weight_loss') dailyCalories -= 400;
+    if (goalKey === 'muscle_gain') dailyCalories += 250;
+    if (goalKey === 'eat_healthier') dailyCalories -= 100;
+    dailyCalories = Math.max(1200, dailyCalories);
+  }
+
+  let dailyProtein = null;
+  if (weightKg) {
+    const proteinPerKg =
+      goalKey === 'muscle_gain'
+        ? 2
+        : goalKey === 'weight_loss'
+        ? 1.8
+        : 1.6;
+    dailyProtein = Math.round(weightKg * proteinPerKg);
+  }
+
+  return {
+    goalKey,
+    maintenanceCalories,
+    dailyCalories,
+    dailyProtein,
+    calorieTolerance: dailyCalories
+      ? goalKey === 'weight_loss'
+        ? 150
+        : 200
+      : null,
+    perMealCalories: dailyCalories ? Math.round(dailyCalories / mealsCount) : null,
+    perMealProtein: dailyProtein
+      ? Math.max(15, Math.round(dailyProtein / mealsCount))
+      : null,
+  };
+}
+
+function scoreExerciseCandidate(exercise, surveyData, profile = getExerciseProfile(exercise)) {
+  const goalKey = normalizeGoal(surveyData.goal);
+  const allowedMuscles = getAllowedMuscles(surveyData.focusAreas);
+  const selectedEquipment = getSelectedEquipmentTokens(
+    surveyData.equipment,
+    surveyData.equipmentOther,
+  );
+  const safetyContext = buildWorkoutSafetyContext(surveyData);
+  const muscle = normalizeTextLower(exercise.muscle);
+  const type = normalizeTextLower(exercise.type);
+  const equipment = normalizeTextLower(exercise.equipment);
+  const trainingExperience = normalizeTextLower(surveyData.trainingExperience);
+  const hasConstraints =
+    (surveyData.healthConditions || []).some(item => item && item !== 'None')
+    || (surveyData.medicationFactors || []).some(
+      item => item && item !== 'No' && item !== 'Prefer not to say',
+    );
+
+  let score = 0;
+
+  if (allowedMuscles?.has(muscle)) score += 45;
+  if ((surveyData.focusAreas || []).includes('Upper body') && ['push', 'pull'].includes(profile.pattern)) {
+    score += 10;
+  }
+  if ((surveyData.focusAreas || []).includes('Lower body') && profile.pattern === 'lower') {
+    score += 10;
+  }
+  if ((surveyData.focusAreas || []).includes('Core') && profile.pattern === 'core') {
+    score += 12;
+  }
+  if (!equipment && selectedEquipment.has('')) score += 10;
+  if (equipment && Array.from(selectedEquipment).some(token => token && equipment.includes(token))) {
+    score += 14;
+  }
+  if (getWorkoutDurationMinutes(surveyData.duration) <= 30 && profile.isCompound) {
+    score += 8;
+  }
+  if (getWorkoutDurationMinutes(surveyData.duration) <= 15 && ['mobility', 'cardio'].includes(profile.pattern)) {
+    score -= 4;
+  }
+
+  if (goalKey === 'muscle_gain') {
+    if (type.includes('strength')) score += 18;
+    if (type.includes('power')) score += 10;
+    if (profile.pattern === 'cardio') score -= 6;
+  }
+  if (goalKey === 'weight_loss') {
+    if (type.includes('cardio')) score += 18;
+    if (type.includes('plyometric')) score += 10;
+    if (type.includes('strength')) score += 8;
+  }
+  if (goalKey === 'improve_endurance' && type.includes('cardio')) score += 20;
+  if (goalKey === 'recovery') {
+    if (type.includes('stretch')) score += 22;
+    if (type.includes('mobility')) score += 18;
+  }
+  if (goalKey === 'stay_active') {
+    if (type.includes('cardio')) score += 8;
+    if (type.includes('strength')) score += 8;
+  }
+
+  if (
+    ['none', 'less than 3 months'].includes(trainingExperience)
+    || normalizeTextLower(surveyData.fitnessLevel) === 'beginner'
+  ) {
+    if (!equipment || equipment.includes('body only')) score += 8;
+    if (equipment.includes('machine') || equipment.includes('band')) score += 6;
+    if (equipment.includes('barbell')) score -= 4;
+  }
+
+  if (hasConstraints && normalizeText(exercise.safety_info)) score += 8;
+  if (normalizeText(exercise.instructions)) score += 3;
+  if (violatesWorkoutSafety(profile, safetyContext)) score -= 30;
+  else if (violatesWorkoutSafety(profile, safetyContext, 'relaxed')) score -= 12;
+
+  return score;
+}
+
+function rankWorkoutCandidates(exercises, surveyData, splitPlan = []) {
+  const scored = exercises
+    .map((exercise, index) => {
+      const profile = getExerciseProfile(exercise);
+      return {
+        exercise,
+        index,
+        profile,
+        score: scoreExerciseCandidate(exercise, surveyData, profile),
+      };
+    })
+    .sort((left, right) => {
+      if (right.score !== left.score) return right.score - left.score;
+      return left.index - right.index;
+    });
+
+  const desiredPatterns = new Set();
+  splitPlan.forEach(spec => {
+    Object.keys(spec.minPatternCounts || {}).forEach(pattern => {
+      desiredPatterns.add(pattern);
+    });
+    (spec.requiredAnyPatternGroups || []).forEach(group => {
+      group.forEach(pattern => desiredPatterns.add(pattern));
+    });
+  });
+
+  const selected = [];
+  const selectedIds = new Set();
+  const patternCounts = {};
+  const addEntry = entry => {
+    if (selectedIds.has(entry.exercise.id) || selected.length >= MAX_WORKOUT_PROMPT_EXERCISES) {
+      return;
+    }
+
+    selected.push(entry.exercise);
+    selectedIds.add(entry.exercise.id);
+    patternCounts[entry.profile.pattern] =
+      (patternCounts[entry.profile.pattern] || 0) + 1;
+  };
+
+  desiredPatterns.forEach(pattern => {
+    const minimumForPattern = pattern === 'core' ? 3 : 4;
+    for (const entry of scored) {
+      if ((patternCounts[pattern] || 0) >= minimumForPattern) {
+        break;
+      }
+      if (entry.profile.pattern === pattern) {
+        addEntry(entry);
+      }
+    }
+  });
+
+  [8, 12, Number.POSITIVE_INFINITY].forEach(cap => {
+    for (const entry of scored) {
+      if (selected.length >= MAX_WORKOUT_PROMPT_EXERCISES) {
+        break;
+      }
+
+      const currentCount = patternCounts[entry.profile.pattern] || 0;
+      if (currentCount >= cap) {
+        continue;
+      }
+      addEntry(entry);
+    }
+  });
+
+  return selected;
+}
+
+function scoreRecipeCandidate(recipe, surveyData, nutritionTargets) {
+  const goalKey = nutritionTargets.goalKey;
+  const cuisineSet = new Set(
+    (surveyData.preferredCuisines || []).map(value => String(value).toLowerCase()),
+  );
+  const useCuisineFilter = cuisineSet.size > 0 && !cuisineSet.has('any');
+  const tagSet = new Set((recipe.tags || []).map(tag => String(tag).toLowerCase()));
+  const prepLimit = parsePrepTimeLimit(surveyData.prepTime);
+  const prepMinutes = toFiniteNumber(recipe.ready_in_minutes) || 0;
+  const calories = toFiniteNumber(recipe.calories) || 0;
+  const protein = toFiniteNumber(recipe.protein) || 0;
+  const cuisine = normalizeTextLower(recipe.cuisine);
+
+  let score = 0;
+
+  if (useCuisineFilter && cuisineSet.has(cuisine)) score += 18;
+  if (Number.isFinite(prepLimit)) {
+    if (prepMinutes <= prepLimit) {
+      score += 12;
+    } else {
+      score -= Math.min(18, Math.ceil((prepMinutes - prepLimit) / 10) * 3);
+    }
+  }
+
+  if (nutritionTargets.perMealCalories) {
+    score += Math.max(
+      0,
+      20 - Math.abs(calories - nutritionTargets.perMealCalories) / 25,
+    );
+  }
+  if (nutritionTargets.perMealProtein) {
+    score += Math.max(
+      0,
+      18 - Math.abs(protein - nutritionTargets.perMealProtein) / 2,
+    );
+  }
+
+  if (goalKey === 'weight_loss') {
+    if (tagSet.has('weight_loss')) score += 18;
+    if (tagSet.has('low_fat')) score += 8;
+    if (tagSet.has('high_protein')) score += 10;
+    score += Math.min(14, protein * 0.45);
+  }
+  if (goalKey === 'muscle_gain') {
+    if (tagSet.has('muscle_gain')) score += 18;
+    if (tagSet.has('high_protein')) score += 12;
+    score += Math.min(18, protein * 0.5);
+  }
+  if (goalKey === 'eat_healthier' || goalKey === 'maintenance') {
+    if (tagSet.has('high_protein')) score += 8;
+    if (tagSet.has('quick_meal')) score += 6;
+    if (tagSet.has('easy')) score += 4;
+  }
+
+  if (surveyData.dietType === 'Vegetarian' && recipe.vegetarian) score += 8;
+  if (surveyData.dietType === 'Vegan' && recipe.vegan) score += 8;
+  if ((surveyData.allergies || []).includes('Gluten') && recipe.gluten_free) score += 8;
+
+  return score;
+}
+
+function rankDietCandidates(recipes, surveyData, nutritionTargets) {
+  return recipes
+    .map((recipe, index) => ({
+      recipe,
+      index,
+      score: scoreRecipeCandidate(recipe, surveyData, nutritionTargets),
+    }))
+    .sort((left, right) => {
+      if (right.score !== left.score) return right.score - left.score;
+      return left.index - right.index;
+    })
+    .slice(0, MAX_DIET_PROMPT_RECIPES)
+    .map(entry => entry.recipe);
+}
+
+function formatExercisePromptLine(
+  exercise,
+  {includeSafetyDetails = false} = {},
+) {
+  const profile = getExerciseProfile(exercise);
+  const fields = [
+    `id:${exercise.id}`,
+    `name:${normalizeText(exercise.name) || 'unknown'}`,
+    `muscle:${normalizeText(exercise.muscle) || 'unknown'}`,
+    `equipment:${normalizeText(exercise.equipment) || 'body weight only'}`,
+    `difficulty:${normalizeText(exercise.difficulty) || 'unknown'}`,
+    `type:${normalizeText(exercise.type) || 'unknown'}`,
+    `pattern:${profile.pattern}`,
+    `compound:${profile.isCompound ? 'yes' : 'no'}`,
+  ];
+
+  if (includeSafetyDetails && profile.riskFlags.size > 0) {
+    fields.push(`caution:${Array.from(profile.riskFlags).join(', ')}`);
+  }
+
+  if (includeSafetyDetails) {
+    const safetyInfo = truncateText(exercise.safety_info, 80);
+    if (safetyInfo) {
+      fields.push(`safety:${safetyInfo}`);
+    }
+
+    const instructions = truncateText(exercise.instructions, 80);
+    if (instructions) {
+      fields.push(`instructions:${instructions}`);
+    }
+  }
+
+  return fields.join(' | ');
+}
+
+function formatRecipePromptLine(recipe) {
+  const tags = (recipe.tags || []).slice(0, MAX_RECIPE_PROMPT_TAGS).join(', ') || 'none';
+  const ingredients =
+    getRecipeIngredientNames(recipe)
+      .slice(0, MAX_RECIPE_PROMPT_INGREDIENTS)
+      .join(', ') || 'not listed';
+  const dietFlags = [
+    recipe.vegetarian && 'vegetarian',
+    recipe.vegan && 'vegan',
+    recipe.gluten_free && 'gluten_free',
+  ]
+    .filter(Boolean)
+    .join(', ') || 'standard';
+
+  return [
+    `id:${recipe.id}`,
+    `title:${normalizeText(recipe.title) || 'unknown'}`,
+    `cuisine:${normalizeText(recipe.cuisine) || 'unspecified'}`,
+    `cal:${toFiniteNumber(recipe.calories) || 0}`,
+    `protein:${toFiniteNumber(recipe.protein) || 0}g`,
+    `carbs:${toFiniteNumber(recipe.carbs) || 0}g`,
+    `fat:${toFiniteNumber(recipe.fat) || 0}g`,
+    `prep:${toFiniteNumber(recipe.ready_in_minutes) || 0}min`,
+    `tags:${tags}`,
+    `diets:${dietFlags}`,
+    `ingredients:${truncateText(ingredients, 90)}`,
+  ].join(' | ');
+}
+
+function filterExercises(allExercises, { fitnessLevel, equipment, equipmentOther }) {
+  const difficulty = DIFFICULTY_MAP[fitnessLevel] || 'beginner';
+  const equipmentTokens = Array.from(
+    getSelectedEquipmentTokens(equipment, equipmentOther),
+  );
 
   return allExercises.filter(e => {
     const diffOk = e.difficulty === difficulty;
     const equip = (e.equipment || '').toLowerCase();
-    const equipOk = equip === '' || equipmentList.some(eq => eq !== '' && equip.includes(eq));
-    const muscleOk = !allowedMuscles || allowedMuscles.has((e.muscle || '').toLowerCase());
-    return diffOk && equipOk && muscleOk;
-  }).slice(0, 50);
+    const equipOk =
+      equip === ''
+      || equipmentTokens.some(token => token !== '' && equip.includes(token));
+    return diffOk && equipOk;
+  });
 }
 
 function calcAge(dob) {
@@ -119,6 +1580,7 @@ function normalizeWorkoutSurveyData(body = {}) {
 function buildWorkoutSurveyInputForStorage(surveyData) {
   const surveyInput = {
     ...surveyData,
+    days: getWorkoutPlanDays(surveyData).map(formatPlanDay),
     equipmentOther: surveyData.equipmentOther || null,
     healthConditionsOther: surveyData.healthConditionsOther || null,
     medicationFactorsOther: surveyData.medicationFactorsOther || null,
@@ -302,20 +1764,42 @@ ${feedback.note ? `- Additional user feedback: ${feedback.note}
 ` : ''}${previousMeals ? `- Previous meals to reduce or avoid repeating too closely: ${previousMeals}
 ` : ''}
 Important regeneration rules:
-- Produce a materially different 7-day meal plan from the previous version while still matching the user's profile.
+- Produce a materially different weekly meal plan from the previous version while still matching the user's profile.
 - Prioritize fixing the issue above.
 - Avoid repeating the same exact meal pattern from the previous plan unless necessary.
 `;
 }
 
-function buildPrompt(user, surveyData, exercises, previousPlan) {
+function buildWorkoutSafetyPrompt(surveyData) {
+  const safetyContext = buildWorkoutSafetyContext(surveyData);
+  const rules = [];
+
+  if (safetyContext.avoidSpinalLoad) {
+    rules.push('Avoid heavy spinal loading and loaded bent-over positions.');
+  }
+  if (safetyContext.avoidHighImpact) {
+    rules.push('Avoid high-impact or jumping-heavy exercise selections.');
+  }
+  if (safetyContext.avoidKneeStress) {
+    rules.push('Avoid aggressive knee-stress patterns when safer alternatives exist.');
+  }
+  if (safetyContext.avoidIntenseConditioning) {
+    rules.push('Avoid all-out conditioning or heart-rate-spiking intervals.');
+  }
+  if (safetyContext.avoidBallistic) {
+    rules.push('Favor controlled tempo over explosive or ballistic work.');
+  }
+
+  return rules.length ? rules.map(rule => `- ${rule}`).join('\n') : '';
+}
+
+function buildPrompt(user, surveyData, exercises, previousPlan, splitPlan) {
   const {
     goal,
     fitnessLevel,
     trainingExperience,
     equipment,
     equipmentOther,
-    days,
     duration,
     healthConditions,
     healthConditionsOther,
@@ -349,14 +1833,17 @@ function buildPrompt(user, surveyData, exercises, previousPlan) {
   const cleanFocus = (focusAreas || []).filter(f => f !== 'Full body' && f !== 'Unsure');
   const focusStr = cleanFocus.length ? cleanFocus.join(', ').toLowerCase() : 'full body';
 
-  const DAYS_ORDER = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-  const planDays = days && days.length
-    ? DAYS_ORDER.filter(d => days.map(x => x.toLowerCase()).includes(d))
-    : DAYS_ORDER.slice(0, 5);
-
-  const exerciseData = exercises.map(e =>
-    `id:${e.id} | ${e.name} | muscle:${e.muscle} | equipment:${e.equipment}`
-  ).join('\n');
+  const planDays = getWorkoutPlanDays(surveyData);
+  const splitPlanText = formatWorkoutSplitPlan(splitPlan);
+  const safetyPrompt = buildWorkoutSafetyPrompt(surveyData);
+  const includeSafetyDetails = hasWorkoutHealthOrMedicationConstraints(
+    surveyData,
+  );
+  const exerciseData = exercises
+    .map(exercise =>
+      formatExercisePromptLine(exercise, {includeSafetyDetails}),
+    )
+    .join('\n');
 
   const outputFormat = planDays.map(day =>
     `${day}:\n- exercise_id: <number>, sets: <number>, reps: <number> (use 0 for timed), duration_seconds: <number> (use 0 for rep-based)`
@@ -386,7 +1873,14 @@ User profile:
 ${additionalNote ? `- Additional note: ${additionalNote}
 ` : ''}
 
-Exercise data:
+Weekly structure to follow exactly:
+${splitPlanText}
+${safetyPrompt ? `
+Extra safety rules:
+${safetyPrompt}
+` : ''}
+
+Exercise data (pre-ranked for fit):
 ${exerciseData}
 ${regenerationContext ? `
 ${regenerationContext}` : ''}
@@ -396,13 +1890,14 @@ Create a weekly workout plan.
 
 Rules:
 - Use ONLY provided exercises (reference by exercise_id)
+- Prefer the exercises that best match the target muscles, goal, equipment, and safety context from the ranked list above.
+- Follow the daily split and structure above exactly.
 - Match ${(fitnessLevel || 'Beginner').toLowerCase()} difficulty
 - Use current fitness level as the baseline difficulty, and use prior training experience only to adjust exercise familiarity, progression, and variety without exceeding that difficulty.
-- Each day should contain 3-5 exercises
+- Match the listed exercise-count range and duration target for each day.
 - If medication/substance factors are present, keep the plan safety-first and avoid unnecessarily extreme intensity, volume, or conditioning demands.
 - For timed exercises (planks, holds), set reps to 0 and duration to seconds (e.g. 30)
 - For rep-based exercises, set duration to 0
-- Do not repeat the same exercise too frequently
 
 Output format STRICTLY (no extra text, no markdown):
 ${outputFormat}`;
@@ -410,13 +1905,16 @@ ${outputFormat}`;
 
 function parseWorkoutResponse(raw, planDays) {
   const items = [];
-  const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  const allowedDaySet = new Set((planDays || []).map(day => day.toLowerCase()));
   let currentDay = null;
 
   for (const line of raw.split('\n')) {
     const trimmed = line.trim().toLowerCase();
-    const dayMatch = DAYS.find(d => trimmed.startsWith(d));
-    if (dayMatch) { currentDay = dayMatch; continue; }
+    const dayMatch = WORKOUT_DAY_ORDER.find(d => trimmed.startsWith(d));
+    if (dayMatch) {
+      currentDay = allowedDaySet.has(dayMatch) ? dayMatch : null;
+      continue;
+    }
     if (!currentDay) continue;
     // match: - exercise_id: 12, sets: 3, reps: 10
     const match = line.match(/exercise_id:\s*(\d+),\s*sets:\s*(\d+),\s*reps:\s*(\d+),\s*duration_seconds:\s*(\d+)/);
@@ -435,27 +1933,90 @@ function parseWorkoutResponse(raw, planDays) {
   return items;
 }
 
+function buildWorkoutRetryPrompt(basePrompt, errors) {
+  return `${basePrompt}
+
+Your previous response was invalid. Regenerate the entire weekly workout plan from scratch and fix these issues:
+- ${errors.join('\n- ')}
+
+Follow the daily split, movement-pattern requirements, time budgets, and exact output format.`;
+}
+
+async function generateValidatedWorkoutItems(
+  prompt,
+  promptExercises,
+  splitPlan,
+  surveyData,
+) {
+  const planDays = splitPlan.map(spec => spec.day);
+  const exercisesById = new Map(promptExercises.map(exercise => [exercise.id, exercise]));
+  const validIds = new Set(promptExercises.map(exercise => exercise.id));
+  let attemptPrompt = prompt;
+  let lastErrors = ['AI generation failed'];
+  let lastRaw = '';
+
+  for (let attempt = 1; attempt <= MAX_WORKOUT_GENERATION_ATTEMPTS; attempt += 1) {
+    const raw = await askGemini(attemptPrompt);
+    lastRaw = raw;
+    console.log(`Gemini raw response (attempt ${attempt}):`, raw?.slice(0, 500));
+
+    const parsedItems = parseWorkoutResponse(raw, planDays);
+    console.log(`Parsed items (attempt ${attempt}):`, parsedItems.length, parsedItems.slice(0, 3));
+    if (parsedItems.length === 0) {
+      lastErrors = ['Failed to parse AI response'];
+      attemptPrompt = buildWorkoutRetryPrompt(prompt, lastErrors);
+      continue;
+    }
+
+    const candidateItems = parsedItems.filter(item => validIds.has(item.exercise_id));
+    const validation = validateWorkoutPlan(
+      candidateItems,
+      exercisesById,
+      splitPlan,
+      surveyData,
+    );
+
+    if (validation.isValid) {
+      return {raw, items: candidateItems};
+    }
+
+    lastErrors = validation.errors;
+    attemptPrompt = buildWorkoutRetryPrompt(prompt, validation.errors);
+  }
+
+  const error = new Error(lastErrors.join(' '));
+  error.raw = lastRaw;
+  throw error;
+}
+
 async function runWorkoutGeneration(userId, surveyData) {
   const user = await User.findById(userId);
   if (!user) {
     throw new Error('User not found');
   }
 
-  const {fitnessLevel, equipment, equipmentOther, days, focusAreas} = surveyData;
-  const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-  const planDays = days && days.length
-    ? days.map(d => d.toLowerCase())
-    : DAYS.slice(0, 5).map(d => d.toLowerCase());
+  const {fitnessLevel, equipment, equipmentOther, focusAreas} = surveyData;
+  const planDays = getWorkoutPlanDays(surveyData);
+  const splitPlan = buildWorkoutSplitPlan(planDays, surveyData);
 
-  const allExercises = await Exercise.find({}, 'id name muscle equipment difficulty');
+  const allExercises = await Exercise.find(
+    {},
+    'id name muscle equipment difficulty type instructions safety_info',
+  );
   const filtered = filterExercises(allExercises, {
     fitnessLevel,
     equipment,
     equipmentOther,
     focusAreas,
   });
+  const safeExercises = applyWorkoutSafetyFilters(filtered, surveyData);
+  const promptExercises = rankWorkoutCandidates(
+    safeExercises,
+    surveyData,
+    splitPlan,
+  );
 
-  if (filtered.length === 0) {
+  if (promptExercises.length === 0) {
     throw new Error('No matching exercises found for your profile');
   }
 
@@ -463,36 +2024,36 @@ async function runWorkoutGeneration(userId, surveyData) {
     ? await WorkoutPlan.findById(surveyData.previousPlanId)
     : null;
 
-  const prompt = buildPrompt(user, surveyData, filtered, previousPlan);
+  const prompt = buildPrompt(
+    user,
+    surveyData,
+    promptExercises,
+    previousPlan,
+    splitPlan,
+  );
   console.log('Prompt preview:', prompt.slice(0, 300));
 
-  let raw;
   try {
-    raw = await askGemini(prompt);
-    console.log('Gemini raw response:', raw?.slice(0, 500));
+    const {items} = await generateValidatedWorkoutItems(
+      prompt,
+      promptExercises,
+      splitPlan,
+      surveyData,
+    );
+
+    const plan = await WorkoutPlan.create({
+      user_id: userId,
+      generated_by: 'ai',
+      status: 'draft',
+      survey_input: JSON.stringify(buildWorkoutSurveyInputForStorage(surveyData)),
+      items,
+    });
+
+    return {plan};
   } catch (geminiErr) {
-    console.error('Gemini error:', geminiErr?.response?.data || geminiErr.message);
-    throw new Error('AI generation failed');
+    console.error('Gemini error:', geminiErr?.response?.data || geminiErr.message || geminiErr.raw);
+    throw new Error(geminiErr?.message || 'AI generation failed');
   }
-
-  const items = parseWorkoutResponse(raw, planDays);
-  console.log('Parsed items:', items.length, items.slice(0, 3));
-  if (items.length === 0) {
-    throw new Error('Failed to parse AI response');
-  }
-
-  const validIds = new Set(filtered.map(e => e.id));
-  const validItems = items.filter(i => validIds.has(i.exercise_id));
-
-  const plan = await WorkoutPlan.create({
-    user_id: userId,
-    generated_by: 'ai',
-    status: 'draft',
-    survey_input: JSON.stringify(buildWorkoutSurveyInputForStorage(surveyData)),
-    items: validItems,
-  });
-
-  return {plan};
 }
 
 function sendQueuedResponse(res, job, alreadyQueued, message) {
@@ -586,32 +2147,74 @@ function filterRecipes(
   {dietType, allergies, allergiesOther, preferredCuisines},
 ) {
   const allergySet = new Set(
-    (allergies || []).filter(a => a !== 'None').map(a => a.toLowerCase())
-      .concat(allergiesOther ? [allergiesOther.toLowerCase()] : [])
+    (allergies || []).filter(a => a !== 'None').map(a => a.toLowerCase()),
   );
+  const customAllergyKeywords = getCustomAllergyKeywords(allergiesOther);
   const cuisineSet = new Set(
     (preferredCuisines || []).map(value => String(value).toLowerCase()),
   );
   const useCuisineFilter = cuisineSet.size > 0 && !cuisineSet.has('any');
 
   return allRecipes.filter(r => {
+    const ingredientSearchText = buildIngredientSearchText(r);
+
     if (dietType === 'Vegetarian' && !r.vegetarian) return false;
     if (dietType === 'Vegan' && !r.vegan) return false;
     if (dietType === 'Keto' && r.carbs > 10) return false;
-    if (allergySet.has('gluten') && !r.gluten_free) return false;
-    if (allergySet.has('dairy') && (r.title || '').toLowerCase().match(/\b(milk|cheese|cream|butter|yogurt)\b/)) return false;
-    if (allergySet.has('nuts') && (r.title || '').toLowerCase().match(/\b(nut|almond|cashew|walnut|pecan|pistachio)\b/)) return false;
+    if (
+      allergySet.has('gluten')
+      && (!r.gluten_free
+        || matchesAnyIngredientKeyword(
+          ingredientSearchText,
+          GLUTEN_INGREDIENT_KEYWORDS,
+        ))
+    ) {
+      return false;
+    }
+    if (
+      allergySet.has('dairy')
+      && matchesAnyIngredientKeyword(
+        ingredientSearchText,
+        DAIRY_INGREDIENT_KEYWORDS,
+      )
+    ) {
+      return false;
+    }
+    if (
+      allergySet.has('nuts')
+      && matchesAnyIngredientKeyword(
+        ingredientSearchText,
+        NUT_INGREDIENT_KEYWORDS,
+      )
+    ) {
+      return false;
+    }
+    if (
+      customAllergyKeywords.some(keyword =>
+        matchesIngredientKeyword(ingredientSearchText, keyword),
+      )
+    ) {
+      return false;
+    }
     if (useCuisineFilter && !cuisineSet.has((r.cuisine || '').toLowerCase())) return false;
     return true;
-  }).slice(0, 40);
+  });
 }
 
-function buildDietPrompt(user, surveyData, recipes, location, previousPlan) {
+function buildDietPrompt(
+  user,
+  surveyData,
+  recipes,
+  location,
+  previousPlan,
+  nutritionTargets,
+) {
   const {
     goal,
     dietType,
     allergies,
     allergiesOther,
+    preferredCuisines,
     mealsPerDay,
     prepTime,
     flexibleMealPreference,
@@ -628,6 +2231,9 @@ function buildDietPrompt(user, surveyData, recipes, location, previousPlan) {
   const skippedDayLabels = DIET_PLAN_DAYS
     .filter(day => !plannedDaySet.has(day))
     .map(formatPlanDay);
+  const preferredCuisineLabels = (preferredCuisines || []).filter(
+    cuisine => cuisine && cuisine !== 'Any',
+  );
   const legacyFlexibilityLine =
     !Array.isArray(surveyData.planDays)
     && flexiblePreference !== 'No flexibility'
@@ -645,9 +2251,20 @@ function buildDietPrompt(user, surveyData, recipes, location, previousPlan) {
   };
   const MEAL_TYPES = MEAL_SETS[mealsCount] || MEAL_SETS[3];
 
-  const recipeData = recipes.map(r =>
-    `id:${r.id} | ${r.title} | cal:${r.calories} | protein:${r.protein}g | carbs:${r.carbs}g | fat:${r.fat}g | prep:${r.ready_in_minutes}min`
-  ).join('\n');
+  const recipeData = recipes.map(formatRecipePromptLine).join('\n');
+  const calorieTargetLine = nutritionTargets.dailyCalories
+    ? `- Daily calorie target: around ${nutritionTargets.dailyCalories} kcal (within about +/- ${nutritionTargets.calorieTolerance} kcal)
+`
+    : '';
+  const proteinTargetLine = nutritionTargets.dailyProtein
+    ? `- Daily protein target: at least ${nutritionTargets.dailyProtein} g
+`
+    : '';
+  const perMealTargetLine =
+    nutritionTargets.perMealCalories || nutritionTargets.perMealProtein
+      ? `- Approx per-meal target: ${nutritionTargets.perMealCalories ? `${nutritionTargets.perMealCalories} kcal` : 'flexible calories'}${nutritionTargets.perMealProtein ? ` and ${nutritionTargets.perMealProtein} g protein` : ''}
+`
+      : '';
 
   const outputFormat = plannedDays.map(day =>
     MEAL_TYPES.map(meal => `- day: ${day}, meal_type: ${meal}, recipe_id: <number>`).join('\n')
@@ -667,17 +2284,18 @@ User profile:
 - Height: ${user.height} cm, Weight: ${user.weight} kg
 - Location: ${location?.city && location?.country ? `${location.city}, ${location.country}` : 'unknown'}
 - Diet type: ${dietType || 'no preference'}
+- Preferred cuisines: ${preferredCuisineLabels.length ? preferredCuisineLabels.join(', ') : 'any'}
 - Allergies: ${allergyStr}
 - Meals per day: ${mealsCount}
 - Prep time available: ${prepTime || 'no limit'}
 - Meal plan days: ${planDayLabels.join(', ')}
-${legacyFlexibilityLine ? `- Flexibility preference: ${legacyFlexibilityLine}
+${calorieTargetLine}${proteinTargetLine}${perMealTargetLine}${legacyFlexibilityLine ? `- Flexibility preference: ${legacyFlexibilityLine}
 ` : ''}${skippedDayLabels.length ? `- Days without planned meals: ${skippedDayLabels.join(', ')}
 ` : ''}
 ${additionalNote ? `- Additional note: ${additionalNote}
 ` : ''}
 
-Recipe data:
+Recipe data (pre-ranked for fit):
 ${recipeData}
 ${regenerationContext ? `
 ${regenerationContext}` : ''}
@@ -687,11 +2305,14 @@ Create a weekly diet plan.
 
 Rules:
 - Use ONLY provided recipes (reference by recipe_id)
+- Prefer the higher-ranked recipes that best match prep time, cuisine, protein, and calorie needs.
 - Generate meals only for these days: ${planDayLabels.join(', ')}
 - Do not generate any meals for days not listed above${skippedDayLabels.length ? ` (${skippedDayLabels.join(', ')})` : ''}
 - Each planned day must have exactly ${mealsCount} meals: ${MEAL_TYPES.join(', ')}
 - Vary recipes across days, avoid repeating the same recipe more than twice
 - Respect the user's diet type and allergies
+- ${nutritionTargets.dailyCalories ? `Keep each planned day close to ${nutritionTargets.dailyCalories} kcal (within about +/- ${nutritionTargets.calorieTolerance} kcal) when the recipe pool allows it.` : 'Keep daily energy aligned to the user goal as closely as the recipe pool allows.'}
+- ${nutritionTargets.dailyProtein ? `Aim for at least ${nutritionTargets.dailyProtein} g protein per planned day, distributing protein across meals.` : 'Favor protein-balanced meal choices across the day.'}
 - Omit all non-selected days entirely from the plan output.
 - If legacy flexibility preferences are present, accommodate them while keeping the overall week aligned to the user's goal.
 - For "Weekends more flexible", prefer placing the more flexible choices on Saturday and Sunday.
@@ -752,6 +2373,11 @@ async function runDietGeneration(userId, surveyData) {
     : null;
   const plannedDays = getDietPlanDays(surveyData);
   const plannedDaySet = new Set(plannedDays.map(formatPlanDay));
+  const nutritionTargets = calculateDietTargets(
+    user,
+    surveyData.goal || user.goal,
+    surveyData.mealsPerDay,
+  );
 
   const Recipe = require('../recipe/recipe.model');
   const allRecipes = await Recipe.findAll();
@@ -761,16 +2387,22 @@ async function runDietGeneration(userId, surveyData) {
     allergiesOther,
     preferredCuisines,
   });
-  if (filtered.length === 0) {
+  const promptRecipes = rankDietCandidates(
+    filtered,
+    surveyData,
+    nutritionTargets,
+  );
+  if (promptRecipes.length === 0) {
     throw new Error('No matching recipes found for your profile');
   }
 
   const prompt = buildDietPrompt(
     user,
     surveyData,
-    filtered,
+    promptRecipes,
     location,
     previousPlan,
+    nutritionTargets,
   );
   console.log('[Diet] Input surveyData:', JSON.stringify(surveyData, null, 2));
   console.log('[Diet] Prompt preview:', prompt.slice(0, 300));
@@ -790,7 +2422,7 @@ async function runDietGeneration(userId, surveyData) {
     throw new Error('Failed to parse AI response');
   }
 
-  const validIds = new Set(filtered.map(r => r.id));
+  const validIds = new Set(promptRecipes.map(r => r.id));
   const validItems = items.filter(
     i => validIds.has(i.recipe_id) && plannedDaySet.has(i.day),
   );
