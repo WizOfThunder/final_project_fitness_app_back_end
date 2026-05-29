@@ -128,10 +128,12 @@ function normalizeDietSurveyData(body = {}) {
       ? uniquePreferredCuisines.filter(value => value !== 'Any')
       : uniquePreferredCuisines
     : ['Any'];
+  const planDays = getDietPlanDays(body);
 
   return {
     ...body,
     preferredCuisines: sanitizedPreferredCuisines,
+    planDays,
     flexibleMealDetails:
       typeof body.flexibleMealDetails === 'string'
         ? body.flexibleMealDetails.trim()
@@ -140,6 +142,70 @@ function normalizeDietSurveyData(body = {}) {
       ? body.additionalNote.trim()
       : '',
   };
+}
+
+const DIET_PLAN_DAYS = [
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+  'sunday',
+];
+
+const CHEAT_DAY_PREFERENCE_MAP = {
+  '1 cheat day per week': ['saturday'],
+  '2 cheat days per week': ['saturday', 'sunday'],
+};
+
+function normalizeDietDay(value) {
+  const day = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return DIET_PLAN_DAYS.includes(day) ? day : '';
+}
+
+function formatPlanDay(day) {
+  return day.charAt(0).toUpperCase() + day.slice(1).toLowerCase();
+}
+
+function getLegacyDietCheatDays(input = {}) {
+  if (Array.isArray(input.cheatDays) && input.cheatDays.length > 0) {
+    return Array.from(
+      new Set(
+        input.cheatDays
+          .map(normalizeDietDay)
+          .filter(Boolean),
+      ),
+    ).slice(0, 6);
+  }
+
+  const preference =
+    typeof input === 'string' ? input : input.flexibleMealPreference;
+  const days = CHEAT_DAY_PREFERENCE_MAP[preference] || [];
+  return [...days];
+}
+
+function getDietPlanDays(input = {}) {
+  if (Array.isArray(input.planDays) && input.planDays.length > 0) {
+    const planDaySet = new Set(
+      input.planDays
+        .map(normalizeDietDay)
+        .filter(Boolean),
+    );
+    const planDays = DIET_PLAN_DAYS.filter(day => planDaySet.has(day)).slice(
+      0,
+      DIET_PLAN_DAYS.length,
+    );
+
+    if (planDays.length > 0) {
+      return planDays;
+    }
+  }
+
+  const cheatDaySet = new Set(getLegacyDietCheatDays(input));
+  const planDays = DIET_PLAN_DAYS.filter(day => !cheatDaySet.has(day));
+
+  return planDays.length > 0 ? planDays : [...DIET_PLAN_DAYS];
 }
 
 function normalizeRegenerationFeedback(feedback = {}, labels = {}) {
@@ -538,12 +604,20 @@ function buildDietPrompt(user, surveyData, recipes, location, previousPlan) {
   const mealsCount = parseInt(mealsPerDay) || 3;
   const age = calcAge(user.dob);
   const flexiblePreference = flexibleMealPreference || 'No flexibility';
-  const flexiblePreferenceLine =
-    flexiblePreference === 'No flexibility'
-      ? 'none'
-      : `${flexiblePreference}${
+  const plannedDays = getDietPlanDays(surveyData);
+  const plannedDaySet = new Set(plannedDays);
+  const planDayLabels = plannedDays.map(formatPlanDay);
+  const skippedDayLabels = DIET_PLAN_DAYS
+    .filter(day => !plannedDaySet.has(day))
+    .map(formatPlanDay);
+  const legacyFlexibilityLine =
+    !Array.isArray(surveyData.planDays)
+    && flexiblePreference !== 'No flexibility'
+    && flexiblePreference !== 'No cheat days'
+      ? `${flexiblePreference}${
           flexibleMealDetails ? ` (${flexibleMealDetails})` : ''
-        }`;
+        }`
+      : null;
 
   const MEAL_SETS = {
     2: ['breakfast', 'dinner'],
@@ -552,13 +626,12 @@ function buildDietPrompt(user, surveyData, recipes, location, previousPlan) {
     5: ['breakfast', 'morning_snack', 'lunch', 'afternoon_snack', 'dinner'],
   };
   const MEAL_TYPES = MEAL_SETS[mealsCount] || MEAL_SETS[3];
-  const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
   const recipeData = recipes.map(r =>
     `id:${r.id} | ${r.title} | cal:${r.calories} | protein:${r.protein}g | carbs:${r.carbs}g | fat:${r.fat}g | prep:${r.ready_in_minutes}min`
   ).join('\n');
 
-  const outputFormat = DAYS.map(day =>
+  const outputFormat = plannedDays.map(day =>
     MEAL_TYPES.map(meal => `- day: ${day}, meal_type: ${meal}, recipe_id: <number>`).join('\n')
   ).join('\n');
 
@@ -579,7 +652,10 @@ User profile:
 - Allergies: ${allergyStr}
 - Meals per day: ${mealsCount}
 - Prep time available: ${prepTime || 'no limit'}
-- Flexible meals/days preference: ${flexiblePreferenceLine}
+- Meal plan days: ${planDayLabels.join(', ')}
+${legacyFlexibilityLine ? `- Flexibility preference: ${legacyFlexibilityLine}
+` : ''}${skippedDayLabels.length ? `- Days without planned meals: ${skippedDayLabels.join(', ')}
+` : ''}
 ${additionalNote ? `- Additional note: ${additionalNote}
 ` : ''}
 
@@ -589,30 +665,40 @@ ${regenerationContext ? `
 ${regenerationContext}` : ''}
 
 Task:
-Create a 7-day diet plan.
+Create a weekly diet plan.
 
 Rules:
 - Use ONLY provided recipes (reference by recipe_id)
-- Each day must have exactly ${mealsCount} meals: ${MEAL_TYPES.join(', ')}
+- Generate meals only for these days: ${planDayLabels.join(', ')}
+- Do not generate any meals for days not listed above${skippedDayLabels.length ? ` (${skippedDayLabels.join(', ')})` : ''}
+- Each planned day must have exactly ${mealsCount} meals: ${MEAL_TYPES.join(', ')}
 - Vary recipes across days, avoid repeating the same recipe more than twice
 - Respect the user's diet type and allergies
-- If flexible meals or days are requested, accommodate them while keeping the overall week aligned to the user's goal.
+- Omit all non-selected days entirely from the plan output.
+- If legacy flexibility preferences are present, accommodate them while keeping the overall week aligned to the user's goal.
 - For "Weekends more flexible", prefer placing the more flexible choices on Saturday and Sunday.
 - For "1 flexible day per week" with no custom day specified, default to Saturday.
-- Flexible meals or days must still use only the provided recipes and should not turn the whole week off-plan.
+- Legacy flexibility handling must still use only the provided recipes and should not turn the whole week off-plan.
 - Only assign solid food meals for breakfast, lunch, and dinner — drinks, smoothies, shakes, or juices should only be assigned as snacks if appropriate
 
 Output format STRICTLY (no extra text, no markdown):
 ${outputFormat}`;
 }
 
-function parseDietResponse(raw) {
+function parseDietResponse(raw, allowedDays = DIET_PLAN_DAYS) {
   const items = [];
+  const allowedDaySet = new Set((allowedDays || []).map(day => day.toLowerCase()));
+
   for (const line of raw.split('\n')) {
     const match = line.match(/day:\s*(\w+),\s*meal_type:\s*([\w_]+),\s*recipe_id:\s*(\d+)/);
     if (match) {
+      const day = match[1].toLowerCase();
+      if (!allowedDaySet.has(day)) {
+        continue;
+      }
+
       items.push({
-        day: match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase(),
+        day: formatPlanDay(day),
         meal_type: match[2].toLowerCase(),
         recipe_id: parseInt(match[3]),
       });
@@ -646,6 +732,8 @@ async function runDietGeneration(userId, surveyData) {
   const previousPlan = surveyData.previousPlanId
     ? await DietPlan.findById(surveyData.previousPlanId)
     : null;
+  const plannedDays = getDietPlanDays(surveyData);
+  const plannedDaySet = new Set(plannedDays.map(formatPlanDay));
 
   const Recipe = require('../recipe/recipe.model');
   const allRecipes = await Recipe.findAll();
@@ -678,14 +766,20 @@ async function runDietGeneration(userId, surveyData) {
     throw new Error('AI generation failed');
   }
 
-  const items = parseDietResponse(raw);
+  const items = parseDietResponse(raw, plannedDays);
   console.log('[Diet] Parsed items:', items.length, items.slice(0, 3));
   if (items.length === 0) {
     throw new Error('Failed to parse AI response');
   }
 
   const validIds = new Set(filtered.map(r => r.id));
-  const validItems = items.filter(i => validIds.has(i.recipe_id));
+  const validItems = items.filter(
+    i => validIds.has(i.recipe_id) && plannedDaySet.has(i.day),
+  );
+
+  if (validItems.length === 0) {
+    throw new Error('Failed to generate a valid diet plan');
+  }
 
   const plan = await DietPlan.create({
     user_id: userId,
@@ -698,6 +792,7 @@ async function runDietGeneration(userId, surveyData) {
       allergiesOther: surveyData.allergiesOther,
       mealsPerDay: surveyData.mealsPerDay,
       prepTime: surveyData.prepTime,
+      planDays: plannedDays.map(formatPlanDay),
       flexibleMealPreference: surveyData.flexibleMealPreference,
       flexibleMealDetails: surveyData.flexibleMealDetails || null,
       additionalNote: surveyData.additionalNote || null,
