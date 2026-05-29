@@ -116,6 +116,22 @@ function normalizeWorkoutSurveyData(body = {}) {
   };
 }
 
+function buildWorkoutSurveyInputForStorage(surveyData) {
+  const surveyInput = {
+    ...surveyData,
+    equipmentOther: surveyData.equipmentOther || null,
+    healthConditionsOther: surveyData.healthConditionsOther || null,
+    medicationFactorsOther: surveyData.medicationFactorsOther || null,
+    additionalNote: surveyData.additionalNote || null,
+    regenerationFeedback: surveyData.regenerationFeedback || null,
+    regeneratedFromPlanId: surveyData.previousPlanId || null,
+  };
+
+  delete surveyInput.previousPlanId;
+
+  return surveyInput;
+}
+
 function normalizeDietSurveyData(body = {}) {
   const preferredCuisines = Array.isArray(body.preferredCuisines)
     ? body.preferredCuisines
@@ -142,6 +158,24 @@ function normalizeDietSurveyData(body = {}) {
       ? body.additionalNote.trim()
       : '',
   };
+}
+
+function buildDietSurveyInputForStorage(surveyData, location) {
+  const surveyInput = {
+    ...surveyData,
+    planDays: getDietPlanDays(surveyData).map(formatPlanDay),
+    flexibleMealDetails: surveyData.flexibleMealDetails || null,
+    additionalNote: surveyData.additionalNote || null,
+    location,
+    regenerationFeedback: surveyData.regenerationFeedback || null,
+    regeneratedFromPlanId: surveyData.previousPlanId || null,
+  };
+
+  delete surveyInput.previousPlanId;
+  delete surveyInput.latitude;
+  delete surveyInput.longitude;
+
+  return surveyInput;
 }
 
 const DIET_PLAN_DAYS = [
@@ -454,23 +488,7 @@ async function runWorkoutGeneration(userId, surveyData) {
     user_id: userId,
     generated_by: 'ai',
     status: 'draft',
-    survey_input: JSON.stringify({
-      goal: surveyData.goal,
-      fitnessLevel: surveyData.fitnessLevel,
-      trainingExperience: surveyData.trainingExperience,
-      equipment: surveyData.equipment,
-      equipmentOther: surveyData.equipmentOther,
-      days: surveyData.days,
-      duration: surveyData.duration,
-      focusAreas: surveyData.focusAreas,
-      healthConditions: surveyData.healthConditions,
-      healthConditionsOther: surveyData.healthConditionsOther,
-      medicationFactors: surveyData.medicationFactors,
-      medicationFactorsOther: surveyData.medicationFactorsOther,
-      additionalNote: surveyData.additionalNote || null,
-      regenerationFeedback: surveyData.regenerationFeedback || null,
-      regeneratedFromPlanId: surveyData.previousPlanId || null,
-    }),
+    survey_input: JSON.stringify(buildWorkoutSurveyInputForStorage(surveyData)),
     items: validItems,
   });
 
@@ -784,22 +802,9 @@ async function runDietGeneration(userId, surveyData) {
   const plan = await DietPlan.create({
     user_id: userId,
     status: 'draft',
-    survey_input: JSON.stringify({
-      goal: surveyData.goal,
-      dietType: surveyData.dietType,
-      preferredCuisines: surveyData.preferredCuisines,
-      allergies: surveyData.allergies,
-      allergiesOther: surveyData.allergiesOther,
-      mealsPerDay: surveyData.mealsPerDay,
-      prepTime: surveyData.prepTime,
-      planDays: plannedDays.map(formatPlanDay),
-      flexibleMealPreference: surveyData.flexibleMealPreference,
-      flexibleMealDetails: surveyData.flexibleMealDetails || null,
-      additionalNote: surveyData.additionalNote || null,
-      location,
-      regenerationFeedback: surveyData.regenerationFeedback || null,
-      regeneratedFromPlanId: surveyData.previousPlanId || null,
-    }),
+    survey_input: JSON.stringify(
+      buildDietSurveyInputForStorage(surveyData, location),
+    ),
     items: validItems,
   });
 
