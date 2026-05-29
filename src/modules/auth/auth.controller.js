@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../users/user.model');
+const { validateProfileMetrics } = require('../users/profileValidation');
 const { saveNotification } = require('../notification/notification.helper');
 const { sendPushNotification } = require('../notification/notification.service');
 const { pool } = require('../../config/db');
@@ -10,6 +11,11 @@ const isUserInactive = (user) => user?.is_active === false || Number(user?.is_ac
 exports.register = async (req, res) => {
   try {
     const { name, email, password, role, height, weight, gender, dob, goal, phone_number, profession, bio, experience_years, certification, certification_url } = req.body;
+
+    const profileValidationError = validateProfileMetrics({ height, weight, dob });
+    if (profileValidationError) {
+      return res.status(400).json({ error: profileValidationError });
+    }
 
     const existing = await User.findOne({ email });
     if (existing) return res.status(400).json({ error: 'Email already registered' });

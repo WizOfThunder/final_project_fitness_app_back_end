@@ -106,6 +106,10 @@ function calcAge(dob) {
 function normalizeWorkoutSurveyData(body = {}) {
   return {
     ...body,
+    medicationFactorsOther:
+      typeof body.medicationFactorsOther === 'string'
+        ? body.medicationFactorsOther.trim()
+        : '',
     additionalNote: typeof body.additionalNote === 'string'
       ? body.additionalNote.trim()
       : '',
@@ -113,8 +117,25 @@ function normalizeWorkoutSurveyData(body = {}) {
 }
 
 function normalizeDietSurveyData(body = {}) {
+  const preferredCuisines = Array.isArray(body.preferredCuisines)
+    ? body.preferredCuisines
+        .map(value => (typeof value === 'string' ? value.trim() : ''))
+        .filter(Boolean)
+    : [];
+  const uniquePreferredCuisines = Array.from(new Set(preferredCuisines));
+  const sanitizedPreferredCuisines = uniquePreferredCuisines.length
+    ? uniquePreferredCuisines.includes('Any') && uniquePreferredCuisines.length > 1
+      ? uniquePreferredCuisines.filter(value => value !== 'Any')
+      : uniquePreferredCuisines
+    : ['Any'];
+
   return {
     ...body,
+    preferredCuisines: sanitizedPreferredCuisines,
+    flexibleMealDetails:
+      typeof body.flexibleMealDetails === 'string'
+        ? body.flexibleMealDetails.trim()
+        : '',
     additionalNote: typeof body.additionalNote === 'string'
       ? body.additionalNote.trim()
       : '',
@@ -191,12 +212,15 @@ function buildPrompt(user, surveyData, exercises, previousPlan) {
   const {
     goal,
     fitnessLevel,
+    trainingExperience,
     equipment,
     equipmentOther,
     days,
     duration,
     healthConditions,
     healthConditionsOther,
+    medicationFactors,
+    medicationFactorsOther,
     focusAreas,
     additionalNote,
   } = surveyData;
@@ -211,6 +235,16 @@ function buildPrompt(user, surveyData, exercises, previousPlan) {
   const conditionsStr = cleanConditions.length
     ? cleanConditions.join(', ') + (healthConditionsOther ? `, ${healthConditionsOther}` : '')
     : 'none';
+
+  const cleanMedicationFactors = (medicationFactors || []).filter(
+    factor => factor !== 'No' && factor !== 'Prefer not to say',
+  );
+  const medicationStr = (medicationFactors || []).includes('Prefer not to say')
+    ? 'not shared'
+    : cleanMedicationFactors.length
+    ? cleanMedicationFactors.join(', ') +
+      (medicationFactorsOther ? `, ${medicationFactorsOther}` : '')
+    : 'none reported';
 
   const cleanFocus = (focusAreas || []).filter(f => f !== 'Full body' && f !== 'Unsure');
   const focusStr = cleanFocus.length ? cleanFocus.join(', ').toLowerCase() : 'full body';
@@ -242,11 +276,13 @@ User profile:
 - Weight: ${user.weight || 'unknown'} kg
 - Gender: ${user.gender || 'unknown'}
 - Fitness level: ${(fitnessLevel || 'Beginner').toLowerCase()}
+- Prior training experience: ${trainingExperience || 'not specified'}
 - Equipment: ${equipmentStr}
 - Days: ${planDays.join(', ')}
 - Duration per session: ${duration || '45 min'}
 - Focus: ${focusStr}
 - Health conditions: ${conditionsStr}
+- Medication/substance factors affecting training: ${medicationStr}
 ${additionalNote ? `- Additional note: ${additionalNote}
 ` : ''}
 
@@ -261,7 +297,9 @@ Create a weekly workout plan.
 Rules:
 - Use ONLY provided exercises (reference by exercise_id)
 - Match ${(fitnessLevel || 'Beginner').toLowerCase()} difficulty
+- Use current fitness level as the baseline difficulty, and use prior training experience only to adjust exercise familiarity, progression, and variety without exceeding that difficulty.
 - Each day should contain 3-5 exercises
+- If medication/substance factors are present, keep the plan safety-first and avoid unnecessarily extreme intensity, volume, or conditioning demands.
 - For timed exercises (planks, holds), set reps to 0 and duration to seconds (e.g. 30)
 - For rep-based exercises, set duration to 0
 - Do not repeat the same exercise too frequently
@@ -353,6 +391,7 @@ async function runWorkoutGeneration(userId, surveyData) {
     survey_input: JSON.stringify({
       goal: surveyData.goal,
       fitnessLevel: surveyData.fitnessLevel,
+      trainingExperience: surveyData.trainingExperience,
       equipment: surveyData.equipment,
       equipmentOther: surveyData.equipmentOther,
       days: surveyData.days,
@@ -360,6 +399,8 @@ async function runWorkoutGeneration(userId, surveyData) {
       focusAreas: surveyData.focusAreas,
       healthConditions: surveyData.healthConditions,
       healthConditionsOther: surveyData.healthConditionsOther,
+      medicationFactors: surveyData.medicationFactors,
+      medicationFactorsOther: surveyData.medicationFactorsOther,
       additionalNote: surveyData.additionalNote || null,
       regenerationFeedback: surveyData.regenerationFeedback || null,
       regeneratedFromPlanId: surveyData.previousPlanId || null,
@@ -418,13 +459,6 @@ exports.regenerateWorkout = async (req, res) => {
       return res.status(404).json({error: 'Workout plan not found'});
     }
 
-    if (previousPlan.status === 'draft') {
-      return res.status(400).json({
-        error:
-          'This plan is still pending review. Wait for review before regenerating.',
-      });
-    }
-
     const surveyData = normalizeWorkoutSurveyData({
       ...(previousPlan.survey_input || {}),
       regenerationFeedback: feedback,
@@ -463,11 +497,19 @@ exports.getMyWorkout = async (req, res) => {
   }
 };
 
-function filterRecipes(allRecipes, { dietType, allergies, allergiesOther }) {
+function filterRecipes(
+  allRecipes,
+  {dietType, allergies, allergiesOther, preferredCuisines},
+) {
   const allergySet = new Set(
     (allergies || []).filter(a => a !== 'None').map(a => a.toLowerCase())
       .concat(allergiesOther ? [allergiesOther.toLowerCase()] : [])
   );
+  const cuisineSet = new Set(
+    (preferredCuisines || []).map(value => String(value).toLowerCase()),
+  );
+  const useCuisineFilter = cuisineSet.size > 0 && !cuisineSet.has('any');
+
   return allRecipes.filter(r => {
     if (dietType === 'Vegetarian' && !r.vegetarian) return false;
     if (dietType === 'Vegan' && !r.vegan) return false;
@@ -475,6 +517,7 @@ function filterRecipes(allRecipes, { dietType, allergies, allergiesOther }) {
     if (allergySet.has('gluten') && !r.gluten_free) return false;
     if (allergySet.has('dairy') && (r.title || '').toLowerCase().match(/\b(milk|cheese|cream|butter|yogurt)\b/)) return false;
     if (allergySet.has('nuts') && (r.title || '').toLowerCase().match(/\b(nut|almond|cashew|walnut|pecan|pistachio)\b/)) return false;
+    if (useCuisineFilter && !cuisineSet.has((r.cuisine || '').toLowerCase())) return false;
     return true;
   }).slice(0, 40);
 }
@@ -487,11 +530,20 @@ function buildDietPrompt(user, surveyData, recipes, location, previousPlan) {
     allergiesOther,
     mealsPerDay,
     prepTime,
+    flexibleMealPreference,
+    flexibleMealDetails,
     additionalNote,
   } = surveyData;
   const allergyStr = (allergies || []).filter(a => a !== 'None').concat(allergiesOther ? [allergiesOther] : []).join(', ') || 'none';
   const mealsCount = parseInt(mealsPerDay) || 3;
   const age = calcAge(user.dob);
+  const flexiblePreference = flexibleMealPreference || 'No flexibility';
+  const flexiblePreferenceLine =
+    flexiblePreference === 'No flexibility'
+      ? 'none'
+      : `${flexiblePreference}${
+          flexibleMealDetails ? ` (${flexibleMealDetails})` : ''
+        }`;
 
   const MEAL_SETS = {
     2: ['breakfast', 'dinner'],
@@ -527,6 +579,7 @@ User profile:
 - Allergies: ${allergyStr}
 - Meals per day: ${mealsCount}
 - Prep time available: ${prepTime || 'no limit'}
+- Flexible meals/days preference: ${flexiblePreferenceLine}
 ${additionalNote ? `- Additional note: ${additionalNote}
 ` : ''}
 
@@ -543,6 +596,10 @@ Rules:
 - Each day must have exactly ${mealsCount} meals: ${MEAL_TYPES.join(', ')}
 - Vary recipes across days, avoid repeating the same recipe more than twice
 - Respect the user's diet type and allergies
+- If flexible meals or days are requested, accommodate them while keeping the overall week aligned to the user's goal.
+- For "Weekends more flexible", prefer placing the more flexible choices on Saturday and Sunday.
+- For "1 flexible day per week" with no custom day specified, default to Saturday.
+- Flexible meals or days must still use only the provided recipes and should not turn the whole week off-plan.
 - Only assign solid food meals for breakfast, lunch, and dinner — drinks, smoothies, shakes, or juices should only be assigned as snacks if appropriate
 
 Output format STRICTLY (no extra text, no markdown):
@@ -571,7 +628,14 @@ async function runDietGeneration(userId, surveyData) {
     throw new Error('User not found');
   }
 
-  const {dietType, allergies, allergiesOther, latitude, longitude} = surveyData;
+  const {
+    dietType,
+    allergies,
+    allergiesOther,
+    preferredCuisines,
+    latitude,
+    longitude,
+  } = surveyData;
   const location = surveyData.location
     ? surveyData.location
     : (latitude && longitude)
@@ -585,7 +649,12 @@ async function runDietGeneration(userId, surveyData) {
 
   const Recipe = require('../recipe/recipe.model');
   const allRecipes = await Recipe.findAll();
-  const filtered = filterRecipes(allRecipes, {dietType, allergies, allergiesOther});
+  const filtered = filterRecipes(allRecipes, {
+    dietType,
+    allergies,
+    allergiesOther,
+    preferredCuisines,
+  });
   if (filtered.length === 0) {
     throw new Error('No matching recipes found for your profile');
   }
@@ -624,10 +693,13 @@ async function runDietGeneration(userId, surveyData) {
     survey_input: JSON.stringify({
       goal: surveyData.goal,
       dietType: surveyData.dietType,
+      preferredCuisines: surveyData.preferredCuisines,
       allergies: surveyData.allergies,
       allergiesOther: surveyData.allergiesOther,
       mealsPerDay: surveyData.mealsPerDay,
       prepTime: surveyData.prepTime,
+      flexibleMealPreference: surveyData.flexibleMealPreference,
+      flexibleMealDetails: surveyData.flexibleMealDetails || null,
       additionalNote: surveyData.additionalNote || null,
       location,
       regenerationFeedback: surveyData.regenerationFeedback || null,
@@ -677,13 +749,6 @@ exports.regenerateDiet = async (req, res) => {
     const previousPlan = await DietPlan.findById(planId);
     if (!previousPlan || previousPlan.user_id !== req.user.id) {
       return res.status(404).json({error: 'Diet plan not found'});
-    }
-
-    if (previousPlan.status === 'draft') {
-      return res.status(400).json({
-        error:
-          'This plan is still pending review. Wait for review before regenerating.',
-      });
     }
 
     const surveyData = normalizeDietSurveyData({

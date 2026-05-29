@@ -1,4 +1,5 @@
 const User = require('./user.model');
+const { validateProfileMetrics } = require('./profileValidation');
 const path = require('path');
 const fs = require('fs');
 const { saveNotification } = require('../notification/notification.helper');
@@ -121,6 +122,11 @@ exports.updateProfile = async (req, res) => {
       experience_years,
       certification,
     } = req.body;
+
+    const profileValidationError = validateProfileMetrics({ height, weight, dob });
+    if (profileValidationError) {
+      return res.status(400).json({ error: profileValidationError });
+    }
 
     const updates = {};
     if (name !== undefined) updates.name = name;

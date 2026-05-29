@@ -1,6 +1,49 @@
 const axios = require('axios');
 const Recipe = require('./recipe.model');
 
+const RECIPE_CUISINES = [
+  'African',
+  'Asian',
+  'American',
+  'British',
+  'Cajun',
+  'Caribbean',
+  'Chinese',
+  'Eastern European',
+  'European',
+  'French',
+  'German',
+  'Greek',
+  'Indian',
+  'Irish',
+  'Italian',
+  'Japanese',
+  'Jewish',
+  'Korean',
+  'Latin American',
+  'Mediterranean',
+  'Mexican',
+  'Middle Eastern',
+  'Nordic',
+  'Southern',
+  'Spanish',
+  'Thai',
+  'Vietnamese',
+];
+
+function normalizeCuisine(value) {
+  const cuisine = typeof value === 'string' ? value.trim() : '';
+  if (!cuisine) {
+    return '';
+  }
+
+  return (
+    RECIPE_CUISINES.find(
+      option => option.toLowerCase() === cuisine.toLowerCase(),
+    ) || ''
+  );
+}
+
 function getNutrient(recipe, name) {
   const nutrient = recipe.nutrition?.nutrients?.find(n => n.name === name);
   return nutrient ? nutrient.amount : 0;
@@ -37,6 +80,13 @@ exports.syncRecipes = async (req, res) => {
       cuisine,
       type
     } = req.body;
+    const normalizedCuisine = normalizeCuisine(cuisine);
+
+    if (!normalizedCuisine) {
+      return res.status(400).json({
+        error: 'A valid cuisine selection is required for recipe sync',
+      });
+    }
 
     const parsedNumber = Math.max(Number.parseInt(number, 10) || 20, 1);
     const parsedOffset = Math.max(Number.parseInt(offset, 10) || 0, 0);
@@ -53,7 +103,7 @@ exports.syncRecipes = async (req, res) => {
     if (maxCalories) params.maxCalories = maxCalories;
     if (minProtein) params.minProtein = minProtein;
     if (maxReadyTime) params.maxReadyTime = maxReadyTime;
-    if (cuisine) params.cuisine = cuisine;
+    params.cuisine = normalizedCuisine;
     // default to excluding drinks unless explicitly overridden
     params.type = type || 'main course,side dish,salad,breakfast,appetizer,soup,snack,dessert';
 
@@ -61,12 +111,18 @@ exports.syncRecipes = async (req, res) => {
 
     const results = response.data.results;
     let synced = 0;
+    let updatedCuisine = 0;
     let skipped = 0;
 
     for (const item of results) {
       const existing = await Recipe.findById(item.id);
       if (existing) {
-        skipped++;
+        if (existing.cuisine !== normalizedCuisine) {
+          await Recipe.updateCuisine(item.id, normalizedCuisine);
+          updatedCuisine++;
+        } else {
+          skipped++;
+        }
         continue;
       }
 
@@ -102,6 +158,7 @@ exports.syncRecipes = async (req, res) => {
         readyInMinutes: raw.readyInMinutes,
         ingredientCount: raw.extendedIngredients?.length || 0,
         instructions,
+        cuisine: normalizedCuisine,
       };
 
       await Recipe.upsert(recipe);
@@ -121,7 +178,12 @@ exports.syncRecipes = async (req, res) => {
       synced++;
     }
 
-    res.json({ message: 'Recipes synced', synced, skipped });
+    res.json({
+      message: 'Recipes synced',
+      synced,
+      updatedCuisine,
+      skipped,
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -129,8 +191,25 @@ exports.syncRecipes = async (req, res) => {
 
 exports.createRecipe = async (req, res) => {
   try {
-    const { title, image, calories, protein, fat, carbs, vegetarian, vegan, gluten_free, ready_in_minutes, tags } = req.body;
+    const {
+      title,
+      image,
+      calories,
+      protein,
+      fat,
+      carbs,
+      vegetarian,
+      vegan,
+      gluten_free,
+      ready_in_minutes,
+      cuisine,
+      tags,
+    } = req.body;
     if (!title) return res.status(400).json({ error: 'title is required' });
+    const normalizedCuisine = normalizeCuisine(cuisine);
+    if (!normalizedCuisine) {
+      return res.status(400).json({error: 'A valid cuisine is required'});
+    }
     // Use a negative auto-decrement ID for manual recipes to avoid Spoonacular ID conflicts
     const { pool } = require('../../config/db');
     const [[minRow]] = await pool.query('SELECT MIN(id) as min_id FROM recipes');
@@ -140,6 +219,7 @@ exports.createRecipe = async (req, res) => {
       calories: calories || 0, protein: protein || 0, fat: fat || 0, carbs: carbs || 0,
       vegetarian: vegetarian || false, vegan: vegan || false, gluten_free: gluten_free || false,
       ready_in_minutes: ready_in_minutes || 0,
+      cuisine: normalizedCuisine,
     };
     await Recipe.upsert(recipe);
     if (tags?.length) await Recipe.insertTags(newId, tags);
@@ -152,8 +232,13 @@ exports.createRecipe = async (req, res) => {
 
 exports.updateRecipe = async (req, res) => {
   try {
-    const allowed = ['title', 'image', 'calories', 'protein', 'fat', 'carbs', 'vegetarian', 'vegan', 'gluten_free', 'ready_in_minutes', 'instructions'];
+    const allowed = ['title', 'image', 'calories', 'protein', 'fat', 'carbs', 'vegetarian', 'vegan', 'gluten_free', 'ready_in_minutes', 'instructions', 'cuisine'];
     const data = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)));
+    const normalizedCuisine = normalizeCuisine(data.cuisine);
+    if (!normalizedCuisine) {
+      return res.status(400).json({error: 'A valid cuisine is required'});
+    }
+    data.cuisine = normalizedCuisine;
     if (Object.keys(data).length === 0) return res.status(400).json({ error: 'No valid fields to update' });
     const { pool } = require('../../config/db');
     await pool.query('UPDATE recipes SET ? WHERE id = ?', [data, req.params.id]);

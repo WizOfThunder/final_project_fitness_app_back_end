@@ -62,23 +62,40 @@ exports.startSession = async (req, res) => {
 
     // Notify member
     const [[session]] = await pool.query(
-      `SELECT hs.*, th.member_id, u.fcm_token AS member_fcm, u.name AS member_name,
-              tp.title AS post_title
+      `SELECT hs.*, th.id AS hire_id, th.status AS hire_status, th.member_id,
+              member.fcm_token AS member_fcm, member.name AS member_name,
+              trainer.name AS trainer_name, tp.title AS post_title
        FROM hire_sessions hs
        JOIN trainer_hires th ON th.id = hs.hire_id
-       JOIN users u ON u.id = th.member_id
+        JOIN users member ON member.id = th.member_id
        JOIN trainer_posts tp ON tp.id = th.post_id
+       JOIN users trainer ON trainer.id = tp.trainer_id
        WHERE hs.id = ?`,
       [req.params.session_id]
     );
     if (session) {
       const title = 'Session Started!';
-      const body = `Your trainer has started the session for "${session.post_title}". Enter the code to confirm attendance.`;
-      await saveNotification(session.member_id, title, body, 'session');
+      const body = `Your trainer has started the session for "${session.post_title}". Your confirmation code is ${code}. Enter it within 30 minutes to confirm attendance.`;
+      await saveNotification(session.member_id, title, body, 'session', {
+        screen: 'MemberSessions',
+        params: {
+          hireId: session.hire_id,
+          trainerName: session.trainer_name,
+          hireStatus: session.hire_status,
+          focusSessionId: session.id,
+        },
+        sessionId: session.id,
+        sessionCode: code,
+      });
       if (session.member_fcm) {
         sendPushNotification(session.member_fcm, title, body, {
           type: 'session_started',
           session_id: String(req.params.session_id),
+          hire_id: String(session.hire_id),
+          hire_status: String(session.hire_status || ''),
+          trainer_name: session.trainer_name || '',
+          focus_session_id: String(session.id),
+          session_code: String(code),
         }).catch(() => {});
       }
     }

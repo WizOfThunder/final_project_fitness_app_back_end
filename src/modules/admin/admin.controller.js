@@ -186,9 +186,52 @@ exports.getTransactions = async (req, res) => {
     const filters = [];
     const params = [];
 
+    const search =
+      typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const paymentMethod =
+      typeof req.query.paymentMethod === 'string'
+        ? req.query.paymentMethod.trim()
+        : '';
+    const dateFrom =
+      typeof req.query.dateFrom === 'string' ? req.query.dateFrom.trim() : '';
+    const dateTo =
+      typeof req.query.dateTo === 'string' ? req.query.dateTo.trim() : '';
+    const minAmount = Number(req.query.minAmount);
+    const maxAmount = Number(req.query.maxAmount);
+
     if (req.query.status && req.query.status !== 'all') {
       filters.push('p.status = ?');
       params.push(req.query.status === 'success' ? 'settlement' : req.query.status);
+    }
+
+    if (paymentMethod && paymentMethod !== 'all') {
+      filters.push('p.payment_type = ?');
+      params.push(paymentMethod);
+    }
+
+    if (search) {
+      filters.push('LOWER(member.name) LIKE ?');
+      params.push(`%${search.toLowerCase()}%`);
+    }
+
+    if (dateFrom) {
+      filters.push(`(COALESCE(p.updated_at, p.created_at) AT TIME ZONE 'Asia/Jakarta')::date >= ?`);
+      params.push(dateFrom);
+    }
+
+    if (dateTo) {
+      filters.push(`(COALESCE(p.updated_at, p.created_at) AT TIME ZONE 'Asia/Jakarta')::date <= ?`);
+      params.push(dateTo);
+    }
+
+    if (Number.isFinite(minAmount)) {
+      filters.push('p.amount >= ?');
+      params.push(minAmount);
+    }
+
+    if (Number.isFinite(maxAmount)) {
+      filters.push('p.amount <= ?');
+      params.push(maxAmount);
     }
 
     const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
