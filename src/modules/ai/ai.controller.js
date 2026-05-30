@@ -100,8 +100,115 @@ const EXERCISE_MOVEMENT_PATTERNS = [
   { bucket: 'conditioning', pattern: /\b(burpee|jump rope|sprint|run|jog|cycling|rowing)\b/ },
 ];
 
+const WORKOUT_SAFETY_TEXT_PATTERNS = {
+  back_pain: /\b(back|spine|spinal|disc|lumbar|sciatica)\b/,
+  knee_issues: /\b(knee|acl|mcl|meniscus|patella|patellar)\b/,
+  shoulder_issue: /\b(shoulder|rotator cuff|impingement|labrum)\b/,
+  ankle_issue: /\b(ankle|achilles|foot|plantar)\b/,
+  wrist_elbow_issue: /\b(wrist|elbow|forearm|carpal|tennis elbow|golfer'?s elbow)\b/,
+  stimulant_sensitive: /\b(stimulant|adderall|ritalin|vyvanse|amphetamine|methylphenidate)\b/,
+  diabetes_medication: /\b(diabetes|insulin|metformin|glucose)\b/,
+  heart_sensitive: /\b(heart|cardiac|blood pressure|hypertension|arrhythmia)\b/,
+  weight_loss_medication: /\b(weight[- ]?loss|semaglutide|ozempic|wegovy|tirzepatide|mounjaro)\b/,
+  hormonal_support: /\b(hormonal|trt|testosterone|anabolic|steroid)\b/,
+};
+
+const WORKOUT_RISK_TAG_PENALTIES = {
+  back_pain: {
+    hardBlock: ['loaded_hinge', 'forward_hinge_loading', 'high_impact_explosive'],
+    soft: {
+      high_bracing: 4,
+      trunk_rotation: 3,
+      cardio_density: 1,
+    },
+    prompt: 'Keep the plan back-friendly: avoid loaded hinging, high-impact explosive work, and aggressive trunk loading.',
+  },
+  knee_issues: {
+    hardBlock: ['high_impact_explosive'],
+    soft: {
+      knee_dominant: 4,
+      single_leg_balance: 3,
+      cardio_density: 1,
+    },
+    prompt: 'Keep the plan knee-friendly: prefer low-impact choices and be conservative with deep knee loading and unstable single-leg work.',
+  },
+  shoulder_issue: {
+    hardBlock: ['overhead_loading'],
+    soft: {
+      upper_push: 3,
+      upper_pull: 1,
+    },
+    prompt: 'Keep the plan shoulder-friendly: avoid overhead loading and be conservative with pressing volume.',
+  },
+  ankle_issue: {
+    hardBlock: ['high_impact_explosive'],
+    soft: {
+      single_leg_balance: 2,
+      cardio_density: 1,
+    },
+    prompt: 'Keep the plan ankle-friendly: avoid impact-heavy work and minimize unstable single-leg demands.',
+  },
+  wrist_elbow_issue: {
+    hardBlock: [],
+    soft: {
+      upper_push: 2,
+      upper_pull: 2,
+    },
+    prompt: 'Keep the plan joint-friendly for the arms: be conservative with heavy gripping, pressing, and pulling volume.',
+  },
+  stimulant_sensitive: {
+    hardBlock: [],
+    soft: {
+      cardio_density: 3,
+      high_impact_explosive: 2,
+    },
+    prompt: 'Avoid unnecessarily extreme conditioning spikes because stimulant factors may raise heart rate and perceived effort.',
+  },
+  diabetes_medication: {
+    hardBlock: [],
+    soft: {
+      cardio_density: 2,
+      high_impact_explosive: 1,
+    },
+    prompt: 'Favor predictable moderate-intensity work over highly erratic conditioning bursts.',
+  },
+  heart_sensitive: {
+    hardBlock: [],
+    soft: {
+      cardio_density: 4,
+      high_impact_explosive: 4,
+      high_bracing: 4,
+      long_isometric: 4,
+    },
+    prompt: 'Keep intensity cardiovascularly conservative: avoid spike-heavy conditioning, long holds, and hard bracing efforts.',
+  },
+  weight_loss_medication: {
+    hardBlock: [],
+    soft: {
+      cardio_density: 2,
+      high_impact_explosive: 1,
+    },
+    prompt: 'Favor steady, lower-nausea training over harsh conditioning spikes.',
+  },
+  hormonal_support: {
+    hardBlock: [],
+    soft: {},
+    prompt: 'Do not auto-escalate intensity or recovery demands because of hormonal support factors.',
+  },
+};
+
 function buildExerciseSelectionContext(
-  { fitnessLevel, equipment, equipmentOther, focusAreas, planDays },
+  {
+    fitnessLevel,
+    equipment,
+    equipmentOther,
+    focusAreas,
+    planDays,
+    healthConditions,
+    healthConditionsOther,
+    medicationFactors,
+    medicationFactorsOther,
+  },
   previousPlan,
 ) {
   const difficulty = DIFFICULTY_MAP[fitnessLevel] || 'beginner';
@@ -149,6 +256,12 @@ function buildExerciseSelectionContext(
       .map(item => String(item.muscle || '').toLowerCase())
       .filter(Boolean),
   );
+  const safetyProfile = buildWorkoutSafetyProfile({
+    healthConditions,
+    healthConditionsOther,
+    medicationFactors,
+    medicationFactorsOther,
+  });
 
   return {
     difficulty,
@@ -158,6 +271,8 @@ function buildExerciseSelectionContext(
     allowedMuscles,
     previousExerciseNames,
     previousMuscles,
+    hardBlockedRiskTags: safetyProfile.hardBlockedRiskTags,
+    softPenaltyByTag: safetyProfile.softPenaltyByTag,
     candidateLimit: Math.min(30, Math.max(18, (planDays?.length || 5) * 6)),
   };
 }
@@ -168,7 +283,9 @@ function filterExercises(allExercises, context) {
     const equip = (e.equipment || '').toLowerCase();
     const equipOk = equip === '' || context.equipmentList.some(eq => eq !== '' && equip.includes(eq));
     const muscleOk = !context.allowedMuscles || context.allowedMuscles.has((e.muscle || '').toLowerCase());
-    return diffOk && equipOk && muscleOk;
+    const riskTags = inferExerciseRiskTags(e);
+    const riskOk = !hasBlockedRiskTag(riskTags, context.hardBlockedRiskTags);
+    return diffOk && equipOk && muscleOk && riskOk;
   });
 }
 
@@ -187,6 +304,158 @@ function inferExerciseMovementBucket(exercise) {
   return 'other';
 }
 
+function incrementPenalty(penaltyMap, tag, value) {
+  penaltyMap.set(tag, (penaltyMap.get(tag) || 0) + value);
+}
+
+function detectWorkoutSafetyFlags(surveyData = {}) {
+  const flags = new Set();
+  const healthConditions = (surveyData.healthConditions || []).map(value => String(value).toLowerCase());
+  const medicationFactors = (surveyData.medicationFactors || []).map(value => String(value).toLowerCase());
+  const freeText = [
+    surveyData.healthConditionsOther,
+    surveyData.medicationFactorsOther,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  if (healthConditions.includes('back pain') || WORKOUT_SAFETY_TEXT_PATTERNS.back_pain.test(freeText)) {
+    flags.add('back_pain');
+  }
+  if (healthConditions.includes('knee issues') || WORKOUT_SAFETY_TEXT_PATTERNS.knee_issues.test(freeText)) {
+    flags.add('knee_issues');
+  }
+  if (WORKOUT_SAFETY_TEXT_PATTERNS.shoulder_issue.test(freeText)) {
+    flags.add('shoulder_issue');
+  }
+  if (WORKOUT_SAFETY_TEXT_PATTERNS.ankle_issue.test(freeText)) {
+    flags.add('ankle_issue');
+  }
+  if (WORKOUT_SAFETY_TEXT_PATTERNS.wrist_elbow_issue.test(freeText)) {
+    flags.add('wrist_elbow_issue');
+  }
+
+  if (
+    medicationFactors.includes('stimulant medication')
+    || WORKOUT_SAFETY_TEXT_PATTERNS.stimulant_sensitive.test(freeText)
+  ) {
+    flags.add('stimulant_sensitive');
+  }
+  if (
+    medicationFactors.includes('diabetes medication')
+    || WORKOUT_SAFETY_TEXT_PATTERNS.diabetes_medication.test(freeText)
+  ) {
+    flags.add('diabetes_medication');
+  }
+  if (
+    medicationFactors.includes('blood pressure / heart medication')
+    || WORKOUT_SAFETY_TEXT_PATTERNS.heart_sensitive.test(freeText)
+  ) {
+    flags.add('heart_sensitive');
+  }
+  if (
+    medicationFactors.includes('weight-loss medication')
+    || WORKOUT_SAFETY_TEXT_PATTERNS.weight_loss_medication.test(freeText)
+  ) {
+    flags.add('weight_loss_medication');
+  }
+  if (
+    medicationFactors.includes('hormonal / trt / anabolic')
+    || WORKOUT_SAFETY_TEXT_PATTERNS.hormonal_support.test(freeText)
+  ) {
+    flags.add('hormonal_support');
+  }
+
+  return flags;
+}
+
+function buildWorkoutSafetyProfile(surveyData = {}) {
+  const activeFlags = Array.from(detectWorkoutSafetyFlags(surveyData));
+  const hardBlockedRiskTags = new Set();
+  const softPenaltyByTag = new Map();
+  const promptNotes = [];
+
+  for (const flag of activeFlags) {
+    const config = WORKOUT_RISK_TAG_PENALTIES[flag];
+    if (!config) continue;
+
+    config.hardBlock.forEach(tag => hardBlockedRiskTags.add(tag));
+    Object.entries(config.soft).forEach(([tag, value]) => {
+      incrementPenalty(softPenaltyByTag, tag, value);
+    });
+    if (config.prompt) promptNotes.push(config.prompt);
+  }
+
+  return {
+    activeFlags,
+    hardBlockedRiskTags,
+    softPenaltyByTag,
+    promptNotes,
+  };
+}
+
+function inferExerciseRiskTags(exercise) {
+  const tags = new Set();
+  const name = String(exercise?.name || '').toLowerCase();
+  const equipment = String(exercise?.equipment || '').toLowerCase();
+  const movement = inferExerciseMovementBucket(exercise);
+
+  if (movement === 'conditioning') tags.add('cardio_density');
+  if (/\b(jump|box jump|plyo|burpee|sprint|bounding|skater hop|tuck jump|jump rope)\b/.test(name)) {
+    tags.add('high_impact_explosive');
+  }
+  if (/\b(clean|snatch|jerk|push press|thruster|kettlebell swing)\b/.test(name)) {
+    tags.add('high_impact_explosive');
+  }
+  if (/\b(overhead|shoulder press|military press|arnold press|push press|thruster|snatch|jerk)\b/.test(name)) {
+    tags.add('overhead_loading');
+  }
+  if (/\b(deadlift|romanian|rdl|good morning|hip hinge|kettlebell swing)\b/.test(name)) {
+    tags.add('loaded_hinge');
+  }
+  if (/\b(deadlift|romanian|rdl|good morning|bent-over|t-bar row|barbell row|clean|snatch)\b/.test(name)) {
+    tags.add('forward_hinge_loading');
+  }
+  if (
+    (equipment.includes('barbell') || equipment.includes('rack') || equipment.includes('machine'))
+    && /\b(squat|leg press|deadlift|good morning|row|press)\b/.test(name)
+  ) {
+    tags.add('high_bracing');
+  }
+  if (/\b(squat|lunge|split squat|step-?up|leg press|wall sit|pistol)\b/.test(name)) {
+    tags.add('knee_dominant');
+  }
+  if (/\b(lunge|split squat|step-?up|pistol|single-leg|single leg)\b/.test(name)) {
+    tags.add('single_leg_balance');
+  }
+  if (/\b(plank|wall sit|hollow hold|hold|isometric)\b/.test(name)) {
+    tags.add('long_isometric');
+  }
+  if (/\b(twist|woodchop|wood chop|russian)\b/.test(name)) {
+    tags.add('trunk_rotation');
+  }
+  if (/\b(run|jog|sprint|burpee|jump rope|rowing|cycling|mountain climber|high knees)\b/.test(name)) {
+    tags.add('cardio_density');
+  }
+  if (/\b(dip|push-?up|press|fly)\b/.test(name) || movement === 'push') {
+    tags.add('upper_push');
+  }
+  if (/\b(row|pull-?up|chin-?up|pulldown|curl|face pull)\b/.test(name) || movement === 'pull') {
+    tags.add('upper_pull');
+  }
+
+  return tags;
+}
+
+function hasBlockedRiskTag(riskTags, blockedTags) {
+  for (const tag of riskTags) {
+    if (blockedTags.has(tag)) return true;
+  }
+
+  return false;
+}
+
 function getExerciseEquipmentBucket(equipment) {
   const normalized = String(equipment || '').toLowerCase();
   if (!normalized) return 'bodyweight';
@@ -199,6 +468,7 @@ function scoreExercise(exercise, context) {
   const muscle = String(exercise.muscle || '').toLowerCase();
   const equipment = String(exercise.equipment || '').toLowerCase();
   const name = String(exercise.name || '').toLowerCase();
+  const riskTags = inferExerciseRiskTags(exercise);
   let score = 0;
 
   if (context.allowedMuscles?.has(muscle)) score += 4;
@@ -209,6 +479,9 @@ function scoreExercise(exercise, context) {
 
   if (context.previousExerciseNames.has(name)) score -= 6;
   if (context.previousMuscles.has(muscle)) score -= 2;
+  for (const tag of riskTags) {
+    score -= context.softPenaltyByTag.get(tag) || 0;
+  }
 
   return score;
 }
@@ -297,6 +570,10 @@ function calcAge(dob) {
 function normalizeWorkoutSurveyData(body = {}) {
   return {
     ...body,
+    healthConditionsOther:
+      typeof body.healthConditionsOther === 'string'
+        ? body.healthConditionsOther.trim()
+        : '',
     medicationFactorsOther:
       typeof body.medicationFactorsOther === 'string'
         ? body.medicationFactorsOther.trim()
@@ -742,6 +1019,13 @@ function buildPrompt(user, surveyData, exercises, previousPlan) {
 
   const cleanFocus = (focusAreas || []).filter(f => f !== 'Full body' && f !== 'Unsure');
   const focusStr = cleanFocus.length ? cleanFocus.join(', ').toLowerCase() : 'full body';
+  const safetyProfile = buildWorkoutSafetyProfile({
+    healthConditions,
+    healthConditionsOther,
+    medicationFactors,
+    medicationFactorsOther,
+  });
+  const safetyGuidance = safetyProfile.promptNotes.join(' ');
 
   const DAYS_ORDER = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
   const planDays = days && days.length
@@ -777,7 +1061,8 @@ User profile:
 - Focus: ${focusStr}
 - Health conditions: ${conditionsStr}
 - Medication/substance factors affecting training: ${medicationStr}
-${additionalNote ? `- Additional note: ${additionalNote}
+${safetyGuidance ? `- Safety priorities: ${safetyGuidance}
+` : ''}${additionalNote ? `- Additional note: ${additionalNote}
 ` : ''}
 
 Exercise data:
@@ -793,6 +1078,7 @@ Rules:
 - Match ${(fitnessLevel || 'Beginner').toLowerCase()} difficulty
 - Use current fitness level as the baseline difficulty, and use prior training experience only to adjust exercise familiarity, progression, and variety without exceeding that difficulty.
 - Each day should contain 3-5 exercises
+- The exercise pool already removes clear safety conflicts; still follow the safety priorities above when assigning volume and intensity.
 - If medication/substance factors are present, keep the plan safety-first and avoid unnecessarily extreme intensity, volume, or conditioning demands.
 - For timed exercises (planks, holds), set reps to 0 and duration to seconds (e.g. 30)
 - For rep-based exercises, set duration to 0
@@ -835,7 +1121,17 @@ async function runWorkoutGeneration(userId, surveyData) {
     throw new Error('User not found');
   }
 
-  const {fitnessLevel, equipment, equipmentOther, days, focusAreas} = surveyData;
+  const {
+    fitnessLevel,
+    equipment,
+    equipmentOther,
+    days,
+    focusAreas,
+    healthConditions,
+    healthConditionsOther,
+    medicationFactors,
+    medicationFactorsOther,
+  } = surveyData;
   const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
   const planDays = days && days.length
     ? days.map(d => d.toLowerCase())
@@ -854,6 +1150,10 @@ async function runWorkoutGeneration(userId, surveyData) {
       equipmentOther,
       focusAreas,
       planDays,
+      healthConditions,
+      healthConditionsOther,
+      medicationFactors,
+      medicationFactorsOther,
     },
     previousPlan,
   );
