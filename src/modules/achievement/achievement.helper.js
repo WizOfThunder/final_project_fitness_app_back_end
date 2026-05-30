@@ -61,10 +61,19 @@ async function triggerAchievements(userId) {
         case 'weekly_streak':      earned = weeklyStreak >= achievement.rule_value; break;
       }
       if (earned) {
-        await pool.query(
-          'INSERT INTO user_achievements (user_id, achievement_id) VALUES (?, ?)',
-          [userId, achievement.id]
+        const [insertResult] = await pool.query(
+          `INSERT INTO user_achievements (user_id, achievement_id)
+           SELECT ?, ?
+           WHERE NOT EXISTS (
+             SELECT 1 FROM user_achievements WHERE user_id = ? AND achievement_id = ?
+           )
+           RETURNING id`,
+          [userId, achievement.id, userId, achievement.id]
         );
+        if (!insertResult.rowCount) {
+          continue;
+        }
+
         console.log(`[Achievement] User ${userId} earned "${achievement.title}"`);
 
         // Send in-app notification

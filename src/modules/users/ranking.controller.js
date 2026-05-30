@@ -26,9 +26,9 @@ exports.getBadgeLeaderboard = async (req, res) => {
       `SELECT u.id as user_id, u.name, u.avatar_url,
               COUNT(a.id) as badge_count,
               DENSE_RANK() OVER (ORDER BY COUNT(a.id) DESC) as rank
-       FROM users u
-        LEFT JOIN user_achievements ua ON ua.user_id = u.id ${dateFilter}
-        LEFT JOIN achievements a ON a.id = ua.achievement_id ${typeFilter}
+        FROM users u
+         LEFT JOIN user_achievements ua ON ua.user_id = u.id ${dateFilter}
+         LEFT JOIN achievements a ON a.id = ua.achievement_id AND a.is_active = TRUE ${typeFilter}
         GROUP BY u.id, u.name, u.avatar_url
         HAVING COUNT(a.id) > 0
         ORDER BY badge_count DESC
@@ -134,8 +134,8 @@ exports.getMyRank = async (req, res) => {
       rankQuery = `
         SELECT ua.user_id, COUNT(a.id) as score,
                DENSE_RANK() OVER (ORDER BY COUNT(a.id) DESC) as rank
-        FROM user_achievements ua
-        JOIN achievements a ON a.id = ua.achievement_id
+         FROM user_achievements ua
+         JOIN achievements a ON a.id = ua.achievement_id AND a.is_active = TRUE
         WHERE 1=1 ${dateFilter} ${typeFilter}
         GROUP BY ua.user_id`;
     }
