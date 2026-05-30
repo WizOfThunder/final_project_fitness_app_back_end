@@ -14,8 +14,8 @@ async function triggerAchievements(userId) {
     if (!unearned.length) return;
 
     // --- challenge_complete ---
-    const [[{ completedCount }]] = await pool.query(
-      `SELECT COUNT(*) as completedCount FROM user_challenges WHERE user_id = ? AND status = 'completed'`,
+    const [[{ completed_count }]] = await pool.query(
+      `SELECT COUNT(*) as completed_count FROM user_challenges WHERE user_id = ? AND status = 'completed'`,
       [userId]
     );
 
@@ -54,7 +54,7 @@ async function triggerAchievements(userId) {
     for (const achievement of unearned) {
       let earned = false;
       switch (achievement.rule_type) {
-        case 'challenge_complete': earned = completedCount >= achievement.rule_value; break;
+        case 'challenge_complete': earned = completed_count >= achievement.rule_value; break;
         case 'steps_total':        earned = totals.steps >= achievement.rule_value; break;
         case 'calories_total':     earned = totals.calories >= achievement.rule_value; break;
         case 'distance_total':     earned = parseFloat(totals.distance) >= achievement.rule_value; break;

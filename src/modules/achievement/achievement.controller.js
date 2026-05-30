@@ -86,8 +86,8 @@ exports.getMyProgress = async (req, res) => {
     );
 
     // Get completed challenge count
-    const [[{ completedCount }]] = await pool.query(
-      `SELECT COUNT(*) as completedCount FROM user_challenges WHERE user_id = ? AND status = 'completed'`,
+    const [[{ completed_count }]] = await pool.query(
+      `SELECT COUNT(*) as completed_count FROM user_challenges WHERE user_id = ? AND status = 'completed'`,
       [userId]
     );
 
@@ -121,7 +121,7 @@ exports.getMyProgress = async (req, res) => {
     }
 
     const progressMap = {
-      challenge_complete: completedCount,
+      challenge_complete: completed_count,
       steps_total: Math.round(totals.steps),
       calories_total: Math.round(totals.calories),
       distance_total: Number(Number(totals.distance || 0).toFixed(2)),
