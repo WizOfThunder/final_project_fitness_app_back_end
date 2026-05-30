@@ -58,22 +58,76 @@ const FOCUS_MUSCLE_MAP = {
   'Unsure': null,
 };
 
-function filterExercises(allExercises, { fitnessLevel, equipment, equipmentOther, focusAreas }) {
-  const difficulty = DIFFICULTY_MAP[fitnessLevel] || 'beginner';
+const FULL_GYM_EQUIPMENT_TERMS = [
+  'barbell',
+  'cable',
+  'machine',
+  'e-z curl bar',
+  'ez curl',
+  'kettlebell',
+  'medicine ball',
+  'exercise ball',
+  'foam roll',
+  'bench',
+  'rack',
+  'pull-up',
+  'dip',
+];
 
-  // Build allowed equipment set — ignore 'None'
+const EXERCISE_EQUIPMENT_BUCKETS = [
+  'barbell',
+  'dumbbell',
+  'cable',
+  'machine',
+  'band',
+  'kettlebell',
+  'medicine ball',
+  'exercise ball',
+  'foam roll',
+  'ez curl',
+  'bench',
+  'rack',
+  'pull-up',
+  'dip',
+];
+
+const EXERCISE_MOVEMENT_PATTERNS = [
+  { bucket: 'push', pattern: /\b(press|push-?up|dip|fly|extension)\b/ },
+  { bucket: 'pull', pattern: /\b(row|pull-?up|chin-?up|curl|pulldown|face pull)\b/ },
+  { bucket: 'squat', pattern: /\b(squat|lunge|step-?up|leg press|split squat)\b/ },
+  { bucket: 'hinge', pattern: /\b(deadlift|hip thrust|bridge|good morning|romanian)\b/ },
+  { bucket: 'core', pattern: /\b(plank|crunch|sit-?up|twist|leg raise|hollow|mountain climber)\b/ },
+  { bucket: 'conditioning', pattern: /\b(burpee|jump rope|sprint|run|jog|cycling|rowing)\b/ },
+];
+
+function buildExerciseSelectionContext(
+  { fitnessLevel, equipment, equipmentOther, focusAreas, planDays },
+  previousPlan,
+) {
+  const difficulty = DIFFICULTY_MAP[fitnessLevel] || 'beginner';
   const cleanEquipment = (equipment || []).filter(e => e !== 'None');
   const hasGym = cleanEquipment.includes('Full gym');
   const equipmentList = [];
+  const exactEquipment = [];
   if (!cleanEquipment.length) equipmentList.push('body only', '');
-  if (cleanEquipment.includes('Dumbbells')) equipmentList.push('dumbbell');
-  if (cleanEquipment.includes('Resistance bands')) equipmentList.push('band');
-  if (hasGym) equipmentList.push('barbell', 'cable', 'machine', 'e-z curl bar', 'ez curl', 'kettlebell', 'medicine ball', 'exercise ball', 'foam roll', 'other', 'bench', 'rack', 'pull-up', 'dip');
-  if (equipmentOther) equipmentList.push(equipmentOther.toLowerCase());
-  // always allow body-weight exercises (empty equipment)
+  if (cleanEquipment.includes('Dumbbells')) {
+    equipmentList.push('dumbbell');
+    exactEquipment.push('dumbbell');
+  }
+  if (cleanEquipment.includes('Resistance bands')) {
+    equipmentList.push('band');
+    exactEquipment.push('band');
+  }
+  if (hasGym) {
+    equipmentList.push(...FULL_GYM_EQUIPMENT_TERMS, 'other');
+    exactEquipment.push(...FULL_GYM_EQUIPMENT_TERMS);
+  }
+  if (equipmentOther) {
+    equipmentList.push(equipmentOther.toLowerCase());
+    exactEquipment.push(equipmentOther.toLowerCase());
+  }
   equipmentList.push('');
 
-  // Build allowed muscles set — ignore 'Full body' and 'Unsure'
   const cleanFocus = (focusAreas || []).filter(f => f !== 'Full body' && f !== 'Unsure');
   let allowedMuscles = null;
   if (cleanFocus.length) {
@@ -84,13 +138,150 @@ function filterExercises(allExercises, { fitnessLevel, equipment, equipmentOther
     }
   }
 
+  const previousItems = previousPlan?.items || [];
+  const previousExerciseNames = new Set(
+    previousItems
+      .map(item => String(item.name || '').toLowerCase())
+      .filter(Boolean),
+  );
+  const previousMuscles = new Set(
+    previousItems
+      .map(item => String(item.muscle || '').toLowerCase())
+      .filter(Boolean),
+  );
+
+  return {
+    difficulty,
+    cleanEquipment,
+    equipmentList: Array.from(new Set(equipmentList)),
+    exactEquipment: Array.from(new Set(exactEquipment)),
+    allowedMuscles,
+    previousExerciseNames,
+    previousMuscles,
+    candidateLimit: Math.min(30, Math.max(18, (planDays?.length || 5) * 6)),
+  };
+}
+
+function filterExercises(allExercises, context) {
   return allExercises.filter(e => {
-    const diffOk = e.difficulty === difficulty;
+    const diffOk = e.difficulty === context.difficulty;
     const equip = (e.equipment || '').toLowerCase();
-    const equipOk = equip === '' || equipmentList.some(eq => eq !== '' && equip.includes(eq));
-    const muscleOk = !allowedMuscles || allowedMuscles.has((e.muscle || '').toLowerCase());
+    const equipOk = equip === '' || context.equipmentList.some(eq => eq !== '' && equip.includes(eq));
+    const muscleOk = !context.allowedMuscles || context.allowedMuscles.has((e.muscle || '').toLowerCase());
     return diffOk && equipOk && muscleOk;
-  }).slice(0, 50);
+  });
+}
+
+function inferExerciseMovementBucket(exercise) {
+  const name = String(exercise?.name || '').toLowerCase();
+  for (const candidate of EXERCISE_MOVEMENT_PATTERNS) {
+    if (candidate.pattern.test(name)) return candidate.bucket;
+  }
+
+  const muscle = String(exercise?.muscle || '').toLowerCase();
+  if (['chest', 'triceps', 'shoulders'].includes(muscle)) return 'push';
+  if (['biceps', 'forearms', 'lats', 'middle_back', 'traps'].includes(muscle)) return 'pull';
+  if (['quadriceps', 'adductors', 'abductors'].includes(muscle)) return 'squat';
+  if (['hamstrings', 'glutes', 'calves'].includes(muscle)) return 'hinge';
+  if (['abdominals', 'lower_back'].includes(muscle)) return 'core';
+  return 'other';
+}
+
+function getExerciseEquipmentBucket(equipment) {
+  const normalized = String(equipment || '').toLowerCase();
+  if (!normalized) return 'bodyweight';
+
+  const match = EXERCISE_EQUIPMENT_BUCKETS.find(bucket => normalized.includes(bucket));
+  return match || normalized;
+}
+
+function scoreExercise(exercise, context) {
+  const muscle = String(exercise.muscle || '').toLowerCase();
+  const equipment = String(exercise.equipment || '').toLowerCase();
+  const name = String(exercise.name || '').toLowerCase();
+  let score = 0;
+
+  if (context.allowedMuscles?.has(muscle)) score += 4;
+
+  if (!context.cleanEquipment.length && equipment === '') score += 4;
+  else if (context.exactEquipment.some(term => equipment.includes(term))) score += 3;
+  else if (equipment === '') score += 1;
+
+  if (context.previousExerciseNames.has(name)) score -= 6;
+  if (context.previousMuscles.has(muscle)) score -= 2;
+
+  return score;
+}
+
+function incrementCounter(counterMap, key) {
+  counterMap.set(key, (counterMap.get(key) || 0) + 1);
+}
+
+function diversifyExercises(sortedExercises, candidateLimit) {
+  const selected = [];
+  const deferred = [];
+  const selectedIds = new Set();
+  const muscleCounts = new Map();
+  const movementCounts = new Map();
+  const equipmentCounts = new Map();
+  const maxPerMuscle = Math.max(2, Math.ceil(candidateLimit / 6));
+  const maxPerMovement = Math.max(2, Math.ceil(candidateLimit / 5));
+  const maxPerEquipment = Math.max(3, Math.ceil(candidateLimit / 3));
+
+  const addExercise = exercise => {
+    selected.push(exercise);
+    selectedIds.add(exercise.id);
+    incrementCounter(muscleCounts, String(exercise.muscle || '').toLowerCase() || 'other');
+    incrementCounter(movementCounts, inferExerciseMovementBucket(exercise));
+    incrementCounter(equipmentCounts, getExerciseEquipmentBucket(exercise.equipment));
+  };
+
+  for (const exercise of sortedExercises) {
+    const muscleKey = String(exercise.muscle || '').toLowerCase() || 'other';
+    const movementKey = inferExerciseMovementBucket(exercise);
+    const equipmentKey = getExerciseEquipmentBucket(exercise.equipment);
+
+    if (
+      (muscleCounts.get(muscleKey) || 0) >= maxPerMuscle
+      || (movementCounts.get(movementKey) || 0) >= maxPerMovement
+      || (equipmentCounts.get(equipmentKey) || 0) >= maxPerEquipment
+    ) {
+      deferred.push(exercise);
+      continue;
+    }
+
+    addExercise(exercise);
+    if (selected.length >= candidateLimit) return selected;
+  }
+
+  for (const exercise of deferred) {
+    if (selectedIds.has(exercise.id)) continue;
+    addExercise(exercise);
+    if (selected.length >= candidateLimit) break;
+  }
+
+  return selected;
+}
+
+function selectExercises(allExercises, criteria, previousPlan) {
+  const context = buildExerciseSelectionContext(criteria, previousPlan);
+  const filtered = filterExercises(allExercises, context);
+
+  return diversifyExercises(
+    filtered
+      .map(exercise => ({
+        ...exercise,
+        _selectionScore: scoreExercise(exercise, context),
+      }))
+      .sort((a, b) => {
+        if (b._selectionScore !== a._selectionScore) {
+          return b._selectionScore - a._selectionScore;
+        }
+
+        return String(a.name || '').localeCompare(String(b.name || ''));
+      }),
+    context.candidateLimit,
+  ).slice(0, context.candidateLimit);
 }
 
 function calcAge(dob) {
@@ -148,8 +339,14 @@ function normalizeDietSurveyData(body = {}) {
 
   return {
     ...body,
+    goal: typeof body.goal === 'string' ? body.goal.trim() : body.goal,
+    dietType: typeof body.dietType === 'string' ? body.dietType.trim() : body.dietType,
     preferredCuisines: sanitizedPreferredCuisines,
     planDays,
+    allergiesOther:
+      typeof body.allergiesOther === 'string'
+        ? body.allergiesOther.trim()
+        : '',
     flexibleMealDetails:
       typeof body.flexibleMealDetails === 'string'
         ? body.flexibleMealDetails.trim()
@@ -192,6 +389,203 @@ const CHEAT_DAY_PREFERENCE_MAP = {
   '1 cheat day per week': ['saturday'],
   '2 cheat days per week': ['saturday', 'sunday'],
 };
+
+const DIET_ALLERGY_INGREDIENT_PATTERNS = {
+  dairy: /\b(milk|cheese|cream|butter|yogurt)\b/,
+  nuts: /\b(nut|almond|cashew|walnut|pecan|pistachio)\b/,
+};
+
+const CUSTOM_ALLERGY_SYNONYM_GROUPS = [
+  ['shrimp', 'prawn'],
+  ['chili', 'chilli'],
+  ['soy', 'tofu', 'soy sauce', 'edamame'],
+];
+
+const RECIPE_STRICT_SNACK_PATTERN = /\b(smoothie|shake|juice)\b/;
+const RECIPE_SNACK_PATTERN = /\b(bars?|bites?|trail mix|parfait|muffin|cookie|brownie|fruit cup|energy balls?|protein balls?)\b/;
+const RECIPE_MEAL_PATTERN = /\b(egg|eggs|omelet|omelette|oatmeal|oats|toast|pancake|rice|pasta|noodle|soup|curry|stir(?: |-)?fry|salad|sandwich|wrap|bowl|chicken|beef|steak|salmon|fish|tofu)\b/;
+const RECIPE_LIGHT_SNACK_PATTERN = /\b(fruit|berries?|apple|banana|orange|grape|nuts?|seeds?|crackers?)\b/;
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function buildRecipeIngredientText(recipe) {
+  if (!Array.isArray(recipe.ingredients)) return '';
+
+  return recipe.ingredients
+    .map(ingredient => {
+      if (typeof ingredient === 'string') return ingredient;
+      return typeof ingredient?.name === 'string' ? ingredient.name : '';
+    })
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+}
+
+function buildRecipeUsageText(recipe) {
+  const title = String(recipe?.title || '').toLowerCase();
+  const ingredientText = buildRecipeIngredientText(recipe);
+  const tags = Array.isArray(recipe?.tags)
+    ? recipe.tags.map(tag => String(tag).toLowerCase()).join(' ')
+    : '';
+
+  return `${title} ${ingredientText} ${tags}`.trim();
+}
+
+function classifyRecipeUsage(recipe) {
+  const text = buildRecipeUsageText(recipe);
+  const calories = Number(recipe?.calories) || 0;
+
+  if (RECIPE_STRICT_SNACK_PATTERN.test(text)) return 'snack';
+  if (RECIPE_MEAL_PATTERN.test(text)) return 'meal';
+  if (RECIPE_SNACK_PATTERN.test(text)) return 'snack';
+  if (calories > 0 && calories <= 250 && RECIPE_LIGHT_SNACK_PATTERN.test(text)) {
+    return 'snack';
+  }
+
+  return 'meal';
+}
+
+function isSnackMealType(mealType) {
+  return ['snack', 'morning_snack', 'afternoon_snack'].includes(
+    String(mealType || '').toLowerCase(),
+  );
+}
+
+function normalizeDelimitedTextList(value) {
+  if (typeof value !== 'string') return [];
+
+  return value
+    .toLowerCase()
+    .replace(/\band\b/g, ',')
+    .split(/[,\n;/]+/)
+    .map(entry => entry.trim().replace(/\s+/g, ' '))
+    .filter(Boolean);
+}
+
+function normalizeCustomAllergyTerms(value) {
+  const expandedTerms = new Set();
+
+  for (const term of normalizeDelimitedTextList(value)) {
+    expandedTerms.add(term);
+
+    for (const group of CUSTOM_ALLERGY_SYNONYM_GROUPS) {
+      if (group.includes(term)) {
+        group.forEach(alias => expandedTerms.add(alias));
+      }
+    }
+  }
+
+  return Array.from(expandedTerms).sort((a, b) => b.length - a.length);
+}
+
+function buildCustomAllergyPatterns(value) {
+  return normalizeCustomAllergyTerms(value).map(
+    term => new RegExp(`\\b${escapeRegExp(term)}\\b`),
+  );
+}
+
+function getRecipePrepTimeLimit(prepTime) {
+  const normalized = typeof prepTime === 'string' ? prepTime.trim().toLowerCase() : '';
+
+  if (!normalized || normalized === 'no time limit') return null;
+  if (normalized.includes('10') && normalized.includes('30')) return 30;
+  if (normalized.includes('30 minutes') && normalized.includes('1 hour')) return 60;
+  if (normalized.includes('1 hour') && normalized.includes('2 hours')) return 120;
+
+  return null;
+}
+
+function normalizeDietGoal(goal, dietType) {
+  const goalText = String(goal || '').toLowerCase();
+  const dietTypeText = String(dietType || '').toLowerCase();
+
+  if (dietTypeText.includes('keto') || goalText.includes('keto')) return 'keto';
+  if (goalText.includes('muscle')) return 'muscle_gain';
+  if (goalText.includes('weight') || goalText.includes('loss') || goalText.includes('fat')) return 'weight_loss';
+  if (goalText.includes('maint')) return 'maintenance';
+  if (goalText.includes('health')) return 'eat_healthier';
+
+  return 'general';
+}
+
+function scoreBalancedRecipeMacros(recipe) {
+  const proteinCalories = (Number(recipe.protein) || 0) * 4;
+  const carbCalories = (Number(recipe.carbs) || 0) * 4;
+  const fatCalories = (Number(recipe.fat) || 0) * 9;
+  const totalMacroCalories = proteinCalories + carbCalories + fatCalories;
+
+  if (totalMacroCalories <= 0) return 0;
+
+  const proteinRatio = proteinCalories / totalMacroCalories;
+  const carbRatio = carbCalories / totalMacroCalories;
+  const fatRatio = fatCalories / totalMacroCalories;
+  const distance =
+    Math.abs(proteinRatio - 0.25)
+    + Math.abs(carbRatio - 0.45)
+    + Math.abs(fatRatio - 0.30);
+
+  return Math.max(0, 20 - distance * 30);
+}
+
+function scoreRecipe(recipe, goalType) {
+  const calories = Number(recipe.calories) || 0;
+  const protein = Number(recipe.protein) || 0;
+  const carbs = Number(recipe.carbs) || 0;
+  const fat = Number(recipe.fat) || 0;
+  const prepMinutes = Number(recipe.ready_in_minutes) || 0;
+  let score = 0;
+
+  switch (goalType) {
+    case 'muscle_gain':
+      score += protein * 3;
+      if (calories >= 350 && calories <= 900) score += 10;
+      break;
+    case 'weight_loss':
+      score += calories > 0 ? (protein / calories) * 1200 : protein * 2;
+      if (calories > 650) score -= (calories - 650) * 0.03;
+      break;
+    case 'maintenance':
+    case 'eat_healthier':
+      score += scoreBalancedRecipeMacros(recipe);
+      score += protein;
+      break;
+    case 'keto':
+      score += protein * 1.5;
+      score += fat;
+      score -= carbs * 5;
+      break;
+    default:
+      score += protein * 1.5;
+      score += scoreBalancedRecipeMacros(recipe) / 2;
+      break;
+  }
+
+  if (prepMinutes > 0) score -= prepMinutes * 0.05;
+
+  return score;
+}
+
+function selectRecipes(allRecipes, criteria) {
+  const filtered = filterRecipes(allRecipes, criteria);
+  const goalType = normalizeDietGoal(criteria.goal, criteria.dietType);
+
+  return filtered
+    .map(recipe => ({
+      ...recipe,
+      _usageKind: classifyRecipeUsage(recipe),
+      _selectionScore: scoreRecipe(recipe, goalType),
+    }))
+    .sort((a, b) => {
+      if (b._selectionScore !== a._selectionScore) {
+        return b._selectionScore - a._selectionScore;
+      }
+
+      return (Number(a.ready_in_minutes) || 0) - (Number(b.ready_in_minutes) || 0);
+    })
+    .slice(0, 40);
+}
 
 function normalizeDietDay(value) {
   const day = typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -447,21 +841,26 @@ async function runWorkoutGeneration(userId, surveyData) {
     ? days.map(d => d.toLowerCase())
     : DAYS.slice(0, 5).map(d => d.toLowerCase());
 
+  const previousPlan = surveyData.previousPlanId
+    ? await WorkoutPlan.findById(surveyData.previousPlanId)
+    : null;
+
   const allExercises = await Exercise.find({}, 'id name muscle equipment difficulty');
-  const filtered = filterExercises(allExercises, {
-    fitnessLevel,
-    equipment,
-    equipmentOther,
-    focusAreas,
-  });
+  const filtered = selectExercises(
+    allExercises,
+    {
+      fitnessLevel,
+      equipment,
+      equipmentOther,
+      focusAreas,
+      planDays,
+    },
+    previousPlan,
+  );
 
   if (filtered.length === 0) {
     throw new Error('No matching exercises found for your profile');
   }
-
-  const previousPlan = surveyData.previousPlanId
-    ? await WorkoutPlan.findById(surveyData.previousPlanId)
-    : null;
 
   const prompt = buildPrompt(user, surveyData, filtered, previousPlan);
   console.log('Prompt preview:', prompt.slice(0, 300));
@@ -583,27 +982,35 @@ exports.getMyWorkout = async (req, res) => {
 
 function filterRecipes(
   allRecipes,
-  {dietType, allergies, allergiesOther, preferredCuisines},
+  {dietType, allergies, allergiesOther, preferredCuisines, prepTime},
 ) {
   const allergySet = new Set(
-    (allergies || []).filter(a => a !== 'None').map(a => a.toLowerCase())
-      .concat(allergiesOther ? [allergiesOther.toLowerCase()] : [])
+    (allergies || [])
+      .filter(a => a !== 'None' && a !== 'Other')
+      .map(a => a.toLowerCase())
   );
+  const customAllergyPatterns = buildCustomAllergyPatterns(allergiesOther);
   const cuisineSet = new Set(
     (preferredCuisines || []).map(value => String(value).toLowerCase()),
   );
   const useCuisineFilter = cuisineSet.size > 0 && !cuisineSet.has('any');
+  const prepTimeLimit = getRecipePrepTimeLimit(prepTime);
 
   return allRecipes.filter(r => {
+    const ingredientText = buildRecipeIngredientText(r);
+    const readyInMinutes = Number(r.ready_in_minutes);
+
     if (dietType === 'Vegetarian' && !r.vegetarian) return false;
     if (dietType === 'Vegan' && !r.vegan) return false;
     if (dietType === 'Keto' && r.carbs > 10) return false;
     if (allergySet.has('gluten') && !r.gluten_free) return false;
-    if (allergySet.has('dairy') && (r.title || '').toLowerCase().match(/\b(milk|cheese|cream|butter|yogurt)\b/)) return false;
-    if (allergySet.has('nuts') && (r.title || '').toLowerCase().match(/\b(nut|almond|cashew|walnut|pecan|pistachio)\b/)) return false;
+    if (allergySet.has('dairy') && DIET_ALLERGY_INGREDIENT_PATTERNS.dairy.test(ingredientText)) return false;
+    if (allergySet.has('nuts') && DIET_ALLERGY_INGREDIENT_PATTERNS.nuts.test(ingredientText)) return false;
+    if (customAllergyPatterns.some(pattern => pattern.test(ingredientText))) return false;
+    if (prepTimeLimit !== null && Number.isFinite(readyInMinutes) && readyInMinutes > prepTimeLimit) return false;
     if (useCuisineFilter && !cuisineSet.has((r.cuisine || '').toLowerCase())) return false;
     return true;
-  }).slice(0, 40);
+  });
 }
 
 function buildDietPrompt(user, surveyData, recipes, location, previousPlan) {
@@ -618,7 +1025,10 @@ function buildDietPrompt(user, surveyData, recipes, location, previousPlan) {
     flexibleMealDetails,
     additionalNote,
   } = surveyData;
-  const allergyStr = (allergies || []).filter(a => a !== 'None').concat(allergiesOther ? [allergiesOther] : []).join(', ') || 'none';
+  const allergyStr = (allergies || [])
+    .filter(a => a !== 'None' && a !== 'Other')
+    .concat(allergiesOther ? [allergiesOther] : [])
+    .join(', ') || 'none';
   const mealsCount = parseInt(mealsPerDay) || 3;
   const age = calcAge(user.dob);
   const flexiblePreference = flexibleMealPreference || 'No flexibility';
@@ -646,7 +1056,7 @@ function buildDietPrompt(user, surveyData, recipes, location, previousPlan) {
   const MEAL_TYPES = MEAL_SETS[mealsCount] || MEAL_SETS[3];
 
   const recipeData = recipes.map(r =>
-    `id:${r.id} | ${r.title} | cal:${r.calories} | protein:${r.protein}g | carbs:${r.carbs}g | fat:${r.fat}g | prep:${r.ready_in_minutes}min`
+    `id:${r.id} | kind:${r._usageKind || 'meal'} | ${r.title} | cal:${r.calories} | protein:${r.protein}g | carbs:${r.carbs}g | fat:${r.fat}g | prep:${r.ready_in_minutes}min`
   ).join('\n');
 
   const outputFormat = plannedDays.map(day =>
@@ -692,6 +1102,8 @@ Rules:
 - Each planned day must have exactly ${mealsCount} meals: ${MEAL_TYPES.join(', ')}
 - Vary recipes across days, avoid repeating the same recipe more than twice
 - Respect the user's diet type and allergies
+- Recipes marked kind:snack should only be assigned to snack, morning_snack, or afternoon_snack
+- For breakfast, lunch, and dinner, prefer recipes marked kind:meal
 - Omit all non-selected days entirely from the plan output.
 - If legacy flexibility preferences are present, accommodate them while keeping the overall week aligned to the user's goal.
 - For "Weekends more flexible", prefer placing the more flexible choices on Saturday and Sunday.
@@ -733,10 +1145,12 @@ async function runDietGeneration(userId, surveyData) {
   }
 
   const {
+    goal,
     dietType,
     allergies,
     allergiesOther,
     preferredCuisines,
+    prepTime,
     latitude,
     longitude,
   } = surveyData;
@@ -755,11 +1169,13 @@ async function runDietGeneration(userId, surveyData) {
 
   const Recipe = require('../recipe/recipe.model');
   const allRecipes = await Recipe.findAll();
-  const filtered = filterRecipes(allRecipes, {
+  const filtered = selectRecipes(allRecipes, {
+    goal: goal || user.goal,
     dietType,
     allergies,
     allergiesOther,
     preferredCuisines,
+    prepTime,
   });
   if (filtered.length === 0) {
     throw new Error('No matching recipes found for your profile');
@@ -791,8 +1207,16 @@ async function runDietGeneration(userId, surveyData) {
   }
 
   const validIds = new Set(filtered.map(r => r.id));
+  const recipeUsageById = new Map(
+    filtered.map(r => [r.id, r._usageKind || 'meal']),
+  );
   const validItems = items.filter(
-    i => validIds.has(i.recipe_id) && plannedDaySet.has(i.day),
+    i => validIds.has(i.recipe_id)
+      && plannedDaySet.has(i.day)
+      && (
+        recipeUsageById.get(i.recipe_id) !== 'snack'
+        || isSnackMealType(i.meal_type)
+      ),
   );
 
   if (validItems.length === 0) {
