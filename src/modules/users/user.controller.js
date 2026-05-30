@@ -1,4 +1,9 @@
 const User = require('./user.model');
+const {
+  normalizeEmail,
+  normalizeOptionalText,
+  validateProfileUpdateFields,
+} = require('./accountValidation');
 const { validateProfileMetrics } = require('./profileValidation');
 const path = require('path');
 const fs = require('fs');
@@ -123,19 +128,29 @@ exports.updateProfile = async (req, res) => {
       certification,
     } = req.body;
 
+    const fieldValidationError = validateProfileUpdateFields({
+      name,
+      email,
+      phone_number,
+      current_phone_number: user.phone_number,
+      role: user.role,
+      profession,
+      experience_years,
+    });
+    if (fieldValidationError) {
+      return res.status(400).json({ error: fieldValidationError });
+    }
+
     const profileValidationError = validateProfileMetrics({ height, weight, dob });
     if (profileValidationError) {
       return res.status(400).json({ error: profileValidationError });
     }
 
     const updates = {};
-    if (name !== undefined) updates.name = name;
+    if (name !== undefined) updates.name = String(name).trim();
 
     if (email !== undefined) {
-      const normalizedEmail = String(email).trim().toLowerCase();
-      if (!normalizedEmail) {
-        return res.status(400).json({ error: 'Email is required' });
-      }
+      const normalizedEmail = normalizeEmail(email);
 
       const existing = await User.findOne({ email: normalizedEmail });
       if (existing && Number(existing.id) !== Number(user.id)) {
@@ -145,18 +160,22 @@ exports.updateProfile = async (req, res) => {
       updates.email = normalizedEmail;
     }
 
-    if (phone_number !== undefined) updates.phone_number = phone_number;
+    if (phone_number !== undefined) updates.phone_number = normalizeOptionalText(phone_number);
     if (height !== undefined) updates.height = height;
     if (weight !== undefined) updates.weight = weight;
     if (gender !== undefined) updates.gender = gender;
     if (dob !== undefined) updates.dob = dob;
-    if (goal !== undefined) updates.goal = goal;
+    if (goal !== undefined) updates.goal = normalizeOptionalText(goal);
 
     if (user.role === 'trainer') {
-      if (profession !== undefined) updates.profession = profession;
-      if (bio !== undefined) updates.bio = bio;
-      if (experience_years !== undefined) updates.experience_years = experience_years;
-      if (certification !== undefined) updates.certification = certification;
+      if (profession !== undefined) updates.profession = normalizeOptionalText(profession);
+      if (bio !== undefined) updates.bio = normalizeOptionalText(bio);
+      if (experience_years !== undefined) {
+        updates.experience_years = experience_years === null || String(experience_years).trim() === ''
+          ? null
+          : Number(experience_years);
+      }
+      if (certification !== undefined) updates.certification = normalizeOptionalText(certification);
     }
 
     const updated = await User.findByIdAndUpdate(req.params.id, updates);

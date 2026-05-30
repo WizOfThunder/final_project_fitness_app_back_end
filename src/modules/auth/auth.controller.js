@@ -1,6 +1,11 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../users/user.model');
+const {
+  normalizeEmail,
+  normalizeOptionalText,
+  validateRegistrationFields,
+} = require('../users/accountValidation');
 const { validateProfileMetrics } = require('../users/profileValidation');
 const { saveNotification } = require('../notification/notification.helper');
 const { sendPushNotification } = require('../notification/notification.service');
@@ -12,24 +17,52 @@ exports.register = async (req, res) => {
   try {
     const { name, email, password, role, height, weight, gender, dob, goal, phone_number, profession, bio, experience_years, certification, certification_url } = req.body;
 
+    const normalizedRole = role || 'member';
+    const validationError = validateRegistrationFields({
+      name,
+      email,
+      password,
+      phone_number,
+      role: normalizedRole,
+      profession,
+      experience_years,
+      certification,
+      certification_url,
+    });
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
+    }
+
     const profileValidationError = validateProfileMetrics({ height, weight, dob });
     if (profileValidationError) {
       return res.status(400).json({ error: profileValidationError });
     }
 
-    const existing = await User.findOne({ email });
+    const normalizedEmail = normalizeEmail(email);
+    const existing = await User.findOne({ email: normalizedEmail });
     if (existing) return res.status(400).json({ error: 'Email already registered' });
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const data = { name, email, password: hashedPassword, role: role || 'member', height, weight, gender, dob, goal, phone_number };
+    const data = {
+      name: String(name).trim(),
+      email: normalizedEmail,
+      password: hashedPassword,
+      role: normalizedRole,
+      height,
+      weight,
+      gender,
+      dob,
+      goal: normalizeOptionalText(goal),
+      phone_number: normalizeOptionalText(phone_number),
+    };
 
-    if (role === 'trainer') {
-      data.profession = profession || null;
-      data.bio = bio || null;
-      data.experience_years = experience_years || null;
-      data.certification = certification || null;
-      data.certification_url = certification_url || null;
+    if (normalizedRole === 'trainer') {
+      data.profession = normalizeOptionalText(profession);
+      data.bio = normalizeOptionalText(bio);
+      data.experience_years = Number(experience_years);
+      data.certification = normalizeOptionalText(certification);
+      data.certification_url = normalizeOptionalText(certification_url);
       data.certification_status = 'pending';
     } else {
       // non-trainers are auto-approved (status not relevant but set for consistency)
@@ -64,7 +97,7 @@ exports.register = async (req, res) => {
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email: normalizeEmail(email) });
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
