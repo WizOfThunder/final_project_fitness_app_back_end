@@ -52,6 +52,13 @@ function addMonthsToDateString(dateString, months) {
   return date.toISOString().split('T')[0];
 }
 
+function addDaysToDateString(dateString, days) {
+  const [year, month, day] = getDateOnlyString(dateString).split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().split('T')[0];
+}
+
 const TrainerPost = {
   async findAllAdmin() {
     const [rows] = await pool.query(
@@ -162,6 +169,39 @@ const TrainerPost = {
       [id]
     );
     return true;
+  },
+  async rolloverPublicAfterCompletion(id, completedEndDate) {
+    const [[post]] = await pool.query(
+      'SELECT is_active, deactivated_by FROM trainer_posts WHERE id = ?',
+      [id]
+    );
+    if (!post || post.is_active || post.deactivated_by !== 'system') return false;
+
+    const [[activeRow]] = await pool.query(
+      `SELECT COUNT(*) AS cnt
+       FROM trainer_hires
+       WHERE post_id = ?
+         AND status IN ('enrolled', 'active')`,
+      [id]
+    );
+    if (Number(activeRow?.cnt || 0) > 0) return false;
+
+    const newEnrollmentDeadline = addDaysToDateString(completedEndDate, 7);
+    const newProgramStartDate = addDaysToDateString(newEnrollmentDeadline, 1);
+
+    await pool.query(
+      `UPDATE trainer_posts
+       SET is_active = TRUE,
+           deactivated_by = NULL,
+           enrollment_deadline = ?,
+           program_start_date = ?
+       WHERE id = ?`,
+      [newEnrollmentDeadline, newProgramStartDate, id]
+    );
+    return {
+      enrollment_deadline: newEnrollmentDeadline,
+      program_start_date: newProgramStartDate,
+    };
   }
 };
 
@@ -208,8 +248,64 @@ const TrainerHire = {
     );
     return rows;
   },
+  async findPublicAutoEndReady() {
+    const [rows] = await pool.query(
+      `SELECT th.*,
+              tp.title AS post_title,
+              tp.visibility,
+              trainer.id AS trainer_user_id,
+              trainer.name AS trainer_name,
+              trainer.fcm_token AS trainer_fcm_token,
+              member.name AS member_name,
+              member.fcm_token AS member_fcm_token
+       FROM trainer_hires th
+       JOIN trainer_posts tp ON tp.id = th.post_id
+       JOIN users trainer ON trainer.id = tp.trainer_id
+       JOIN users member ON member.id = th.member_id
+       WHERE th.status = 'active'
+         AND tp.visibility = 'public'
+         AND th.end_date < ${WIB_CURRENT_DATE_SQL}`
+    );
+    return rows;
+  },
+  async findPrivateAutoEndReady() {
+    const [rows] = await pool.query(
+      `SELECT th.*,
+              tp.title AS post_title,
+              tp.visibility,
+              trainer.id AS trainer_user_id,
+              trainer.name AS trainer_name,
+              trainer.fcm_token AS trainer_fcm_token,
+              member.name AS member_name,
+              member.fcm_token AS member_fcm_token
+       FROM trainer_hires th
+       JOIN trainer_posts tp ON tp.id = th.post_id
+       JOIN users trainer ON trainer.id = tp.trainer_id
+       JOIN users member ON member.id = th.member_id
+       WHERE th.status = 'active'
+         AND tp.visibility = 'private'
+         AND th.end_date < ${WIB_CURRENT_DATE_SQL}`
+    );
+    return rows;
+  },
   async updateStatus(id, status) {
     await pool.query('UPDATE trainer_hires SET status = ? WHERE id = ?', [status, id]);
+  },
+  async completeByEndDate(id) {
+    const [result] = await pool.query(
+      `UPDATE trainer_hires
+       SET status = 'ended',
+           early_end_requested_by = NULL,
+           early_end_requested_at = NULL
+       WHERE id = ?
+         AND status = 'active'
+         AND end_date < ${WIB_CURRENT_DATE_SQL}`,
+      [id]
+    );
+    if (result.affectedRows > 0) {
+      await Session.trimFutureSessions(id);
+    }
+    return result.affectedRows > 0;
   },
   async setPendingTrainerResponse(orderId) {
     const [result] = await pool.query(
@@ -231,7 +327,7 @@ const TrainerHire = {
     );
     return result.affectedRows > 0;
   },
-  // For public posts: auto-activate immediately (rolling) or enroll for cohort
+  // For public posts: enroll until the cohort start date, then activate
   async activateFromPayment(orderId) {
     const [[hire]] = await pool.query(
       `SELECT th.id, th.post_id, th.status, tp.visibility, tp.program_start_date, tp.max_slots,
@@ -248,26 +344,29 @@ const TrainerHire = {
     if (!hire) return null;
     if (hire.status !== 'pending_payment') return null;
 
-    const hasProgramStart = hire.program_start_date
-      && getDateOnlyString(hire.program_start_date) > getCurrentWibDateString();
+    const start_date = getDateOnlyString(hire.program_start_date) || getCurrentWibDateString();
+    const end_date = addMonthsToDateString(start_date, 1);
+    const hasProgramStarted = start_date <= getCurrentWibDateString();
 
-    if (hasProgramStart) {
-      // Cohort mode: enroll, start/end set on program_start_date
+    if (!hasProgramStarted) {
+      // Public posts always enroll first and activate on their program start date.
       await pool.query(
-        "UPDATE trainer_hires SET status = 'enrolled', trainer_response_deadline = NULL WHERE payment_order_id = ?",
-        [orderId]
+        "UPDATE trainer_hires SET status = 'enrolled', start_date = ?, end_date = ?, trainer_response_deadline = NULL WHERE payment_order_id = ?",
+        [start_date, end_date, orderId]
       );
       hire.flow = 'enrolled';
+      hire.start_date = start_date;
+      hire.end_date = end_date;
     } else {
-      // Rolling mode: activate immediately
-      const start_date = new Date();
-      const end_date = new Date();
-      end_date.setMonth(end_date.getMonth() + 1);
+      // If payment confirms on/after the cohort start date, activate immediately
+      // but still keep the original month window from the program start date.
       await pool.query(
         "UPDATE trainer_hires SET status = 'active', start_date = ?, end_date = ?, trainer_response_deadline = NULL WHERE payment_order_id = ?",
         [start_date, end_date, orderId]
       );
       hire.flow = 'active';
+      hire.start_date = start_date;
+      hire.end_date = end_date;
       // Generate sessions from post schedule
       if (hire.schedule || true) {
         const [[postData]] = await pool.query('SELECT schedule FROM trainer_posts WHERE id = ?', [hire.post_id]);

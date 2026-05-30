@@ -70,6 +70,41 @@ function getCurrentWibDateString() {
   return formatWibDate(new Date());
 }
 
+function addMonthsToDateString(dateString, months) {
+  const [year, month, day] = getDateOnlyString(dateString).split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCMonth(date.getUTCMonth() + months);
+  return date.toISOString().split('T')[0];
+}
+
+function validatePublicPostDates({ enrollmentDeadline, programStartDate }) {
+  const today = getCurrentWibDateString();
+  const normalizedEnrollmentDeadline = getDateOnlyString(enrollmentDeadline);
+  const normalizedProgramStartDate = getDateOnlyString(programStartDate);
+
+  if (!normalizedEnrollmentDeadline) {
+    return 'Enrollment deadline is required for public posts';
+  }
+
+  if (!normalizedProgramStartDate) {
+    return 'Program start date is required for public posts';
+  }
+
+  if (normalizedEnrollmentDeadline < today) {
+    return 'Enrollment deadline must be today or in the future';
+  }
+
+  if (normalizedProgramStartDate < today) {
+    return 'Program start date must be today or in the future';
+  }
+
+  if (normalizedProgramStartDate <= normalizedEnrollmentDeadline) {
+    return 'Program start date must be after the enrollment deadline';
+  }
+
+  return null;
+}
+
 function mapMidtransPaymentStatus(transactionStatus, fraudStatus) {
   if (transactionStatus === 'capture' && fraudStatus === 'accept') {
     return 'settlement';
@@ -156,6 +191,7 @@ async function reconcileReadyEnrolledHires(filters = {}) {
 async function getTrainerPostState(postId, trainerId) {
   const [[post]] = await pool.query(
     `SELECT tp.id, tp.trainer_id, tp.is_active, tp.deactivated_by, tp.schedule,
+            tp.visibility, tp.enrollment_deadline, tp.program_start_date,
             (
               SELECT COUNT(*)
               FROM trainer_hires th
@@ -363,6 +399,7 @@ exports.createPost = async (req, res) => {
     if (session_type === 'offline' && !location) return res.status(400).json({ error: 'Location is required for offline sessions' });
 
     const nextIsActive = is_active !== undefined ? !!is_active : true;
+    const nextVisibility = visibility || 'public';
 
     if (nextIsActive && Array.isArray(schedule) && schedule.length > 0) {
       const conflict = await findBlockingScheduleConflict(
@@ -373,16 +410,14 @@ exports.createPost = async (req, res) => {
       if (conflict) return res.status(400).json({ error: conflict });
     }
 
-    const today = getCurrentWibDateString();
-    if (enrollment_deadline && visibility === 'public') {
-      if (getDateOnlyString(enrollment_deadline) < today)
-        return res.status(400).json({ error: 'Enrollment deadline must be today or in the future' });
-    }
-    if (program_start_date && visibility === 'public') {
-      if (getDateOnlyString(program_start_date) < today)
-        return res.status(400).json({ error: 'Program start date must be today or in the future' });
-      if (enrollment_deadline && getDateOnlyString(program_start_date) <= getDateOnlyString(enrollment_deadline))
-        return res.status(400).json({ error: 'Program start date must be after the enrollment deadline' });
+    if (nextVisibility === 'public') {
+      const publicDateError = validatePublicPostDates({
+        enrollmentDeadline: enrollment_deadline,
+        programStartDate: program_start_date,
+      });
+      if (publicDateError) {
+        return res.status(400).json({ error: publicDateError });
+      }
     }
 
     const post = await TrainerPost.create({
@@ -390,11 +425,11 @@ exports.createPost = async (req, res) => {
       is_active: nextIsActive,
       session_type: session_type || 'online',
       location: location || null,
-      visibility: visibility || 'public',
-      max_slots: visibility === 'private' ? 1 : (max_slots || null),
+      visibility: nextVisibility,
+      max_slots: nextVisibility === 'private' ? 1 : (max_slots || null),
       schedule: schedule ? JSON.stringify(schedule) : null,
-      enrollment_deadline: visibility === 'public' ? (enrollment_deadline || null) : null,
-      program_start_date: visibility === 'public' ? (program_start_date || null) : null,
+      enrollment_deadline: nextVisibility === 'public' ? enrollment_deadline : null,
+      program_start_date: nextVisibility === 'public' ? program_start_date : null,
     });
     res.status(201).json(post);
   } catch (error) {
@@ -435,6 +470,8 @@ exports.updatePost = async (req, res) => {
 
     const nextIsActive =
       is_active !== undefined ? !!is_active : !!postState.is_active;
+    const nextVisibility =
+      visibility !== undefined ? visibility : postState.visibility;
     const scheduleToValidate = Array.isArray(schedule)
       ? schedule
       : postState.schedule
@@ -451,14 +488,30 @@ exports.updatePost = async (req, res) => {
       if (conflict) return res.status(400).json({ error: conflict });
     }
 
-    if (visibility === 'public') {
-      const today = getCurrentWibDateString();
-      if (enrollment_deadline && getDateOnlyString(enrollment_deadline) < today)
-        return res.status(400).json({ error: 'Enrollment deadline must be today or in the future' });
-      if (program_start_date && getDateOnlyString(program_start_date) < today)
-        return res.status(400).json({ error: 'Program start date must be today or in the future' });
-      if (program_start_date && enrollment_deadline && getDateOnlyString(program_start_date) <= getDateOnlyString(enrollment_deadline))
-        return res.status(400).json({ error: 'Program start date must be after the enrollment deadline' });
+    const effectiveEnrollmentDeadline =
+      nextVisibility === 'public'
+        ? (enrollment_deadline !== undefined
+            ? enrollment_deadline
+            : postState.enrollment_deadline)
+        : null;
+    const effectiveProgramStartDate =
+      nextVisibility === 'public'
+        ? (program_start_date !== undefined
+            ? program_start_date
+            : postState.program_start_date)
+        : null;
+
+    const requiresValidPublicDates =
+      nextVisibility === 'public' && (!isToggleOnly || nextIsActive);
+
+    if (requiresValidPublicDates) {
+      const publicDateError = validatePublicPostDates({
+        enrollmentDeadline: effectiveEnrollmentDeadline,
+        programStartDate: effectiveProgramStartDate,
+      });
+      if (publicDateError) {
+        return res.status(400).json({ error: publicDateError });
+      }
     }
 
     // Only include defined fields so partial updates (e.g. toggle active) don't null out other columns
@@ -475,12 +528,12 @@ exports.updatePost = async (req, res) => {
     if (session_type !== undefined) data.session_type = session_type;
     if (location !== undefined) data.location = location || null;
     if (visibility !== undefined) data.visibility = visibility;
-    if (max_slots !== undefined) data.max_slots = visibility === 'private' ? 1 : (max_slots || null);
+    if (max_slots !== undefined) data.max_slots = nextVisibility === 'private' ? 1 : (max_slots || null);
     if (schedule !== undefined) data.schedule = JSON.stringify(schedule);
-    if (visibility === 'public') {
-      if (enrollment_deadline !== undefined) data.enrollment_deadline = enrollment_deadline || null;
-      if (program_start_date !== undefined) data.program_start_date = program_start_date || null;
-    } else if (visibility === 'private') {
+    if (nextVisibility === 'public') {
+      if (enrollment_deadline !== undefined) data.enrollment_deadline = effectiveEnrollmentDeadline;
+      if (program_start_date !== undefined) data.program_start_date = effectiveProgramStartDate;
+    } else if (nextVisibility === 'private') {
       data.enrollment_deadline = null;
       data.program_start_date = null;
     }
@@ -520,6 +573,19 @@ exports.hireTrainer = async (req, res) => {
     const post = await TrainerPost.findById(req.params.id);
     if (!post) return res.status(404).json({ error: 'Post not found' });
     if (!post.is_active) return res.status(400).json({ error: 'This trainer is not available' });
+
+    if (post.visibility === 'public') {
+      const publicDateError = validatePublicPostDates({
+        enrollmentDeadline: post.enrollment_deadline,
+        programStartDate: post.program_start_date,
+      });
+      if (publicDateError) {
+        return res.status(400).json({
+          error:
+            'This public post needs a new enrollment deadline and program start date before members can hire it.',
+        });
+      }
+    }
 
     // Check if member already has an active/pending hire for this post
     const [existingHire] = await require('../../config/db').pool.query(
@@ -581,12 +647,20 @@ exports.hireTrainer = async (req, res) => {
       status: 'pending'
     });
 
+    const publicStartDate =
+      post.visibility === 'public'
+        ? getDateOnlyString(post.program_start_date)
+        : null;
+    const publicEndDate = publicStartDate
+      ? addMonthsToDateString(publicStartDate, 1)
+      : null;
+
     const hire = await TrainerHire.create({
       member_id: req.user.id,
       post_id: post.id,
       payment_order_id: orderId,
-      start_date: new Date(),
-      end_date: new Date(),  // will be set properly on accept
+      start_date: publicStartDate || new Date(),
+      end_date: publicEndDate || new Date(),
       status: 'pending_payment'
     });
 

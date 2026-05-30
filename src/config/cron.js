@@ -280,6 +280,109 @@ function startCronJobs() {
     } catch (err) {
       console.error('[CRON] Error in hire expiry job:', err.message);
     }
+
+    console.log('[CRON] Checking completed private hires...');
+    try {
+      const completedPrivateHires = await TrainerHire.findPrivateAutoEndReady();
+      for (const hire of completedPrivateHires) {
+        try {
+          const ended = await TrainerHire.completeByEndDate(hire.id);
+          if (!ended) {
+            continue;
+          }
+
+          await TrainerPost.reactivateIfSystemClosed(hire.post_id);
+          console.log(`[CRON] Auto-ended private hire ${hire.id}`);
+
+          const memberTitle = 'Subscription Completed';
+          const memberBody = `Your subscription to "${hire.post_title}" has completed. You can now leave a review.`;
+          await saveNotification(hire.member_id, memberTitle, memberBody, 'trainer_hire');
+          if (hire.member_fcm_token) {
+            sendPushNotification(hire.member_fcm_token, memberTitle, memberBody, {
+              type: 'hire_ended',
+              hire_id: String(hire.id),
+              post_id: String(hire.post_id),
+            }).catch(err =>
+              console.error(`[CRON] FCM member completion notif failed for hire ${hire.id}:`, err.message)
+            );
+          }
+
+          const trainerTitle = 'Subscription Completed';
+          const trainerBody = `Your private subscription with ${hire.member_name} for "${hire.post_title}" has reached its end date.`;
+          await saveNotification(hire.trainer_user_id, trainerTitle, trainerBody, 'trainer_hire', {
+            screen: 'TrainerHireManagement',
+            params: { initialTab: 'past', hireId: hire.id },
+          });
+          if (hire.trainer_fcm_token) {
+            sendPushNotification(hire.trainer_fcm_token, trainerTitle, trainerBody, {
+              type: 'hire_ended',
+              hire_id: String(hire.id),
+              post_id: String(hire.post_id),
+            }).catch(err =>
+              console.error(`[CRON] FCM trainer completion notif failed for hire ${hire.id}:`, err.message)
+            );
+          }
+        } catch (err) {
+          console.error(`[CRON] Failed to auto-end private hire ${hire.id}:`, err.message);
+        }
+      }
+    } catch (err) {
+      console.error('[CRON] Error in private hire completion job:', err.message);
+    }
+
+    console.log('[CRON] Checking completed public hires...');
+    try {
+      const completedPublicHires = await TrainerHire.findPublicAutoEndReady();
+      for (const hire of completedPublicHires) {
+        try {
+          const ended = await TrainerHire.completeByEndDate(hire.id);
+          if (!ended) {
+            continue;
+          }
+
+          const rollover = await TrainerPost.rolloverPublicAfterCompletion(
+            hire.post_id,
+            hire.end_date,
+          );
+          console.log(`[CRON] Auto-ended public hire ${hire.id}`);
+
+          const memberTitle = 'Subscription Completed';
+          const memberBody = `Your subscription to "${hire.post_title}" has completed. You can now leave a review.`;
+          await saveNotification(hire.member_id, memberTitle, memberBody, 'trainer_hire');
+          if (hire.member_fcm_token) {
+            sendPushNotification(hire.member_fcm_token, memberTitle, memberBody, {
+              type: 'hire_ended',
+              hire_id: String(hire.id),
+              post_id: String(hire.post_id),
+            }).catch(err =>
+              console.error(`[CRON] FCM member public completion notif failed for hire ${hire.id}:`, err.message)
+            );
+          }
+
+          const trainerTitle = 'Program Completed';
+          const trainerBody = rollover
+            ? `Your public program "${hire.post_title}" has reached its end date for ${hire.member_name}. The post is active again with enrollment open until ${rollover.enrollment_deadline}, and the next program starts on ${rollover.program_start_date}.`
+            : `Your public program "${hire.post_title}" has reached its end date for ${hire.member_name}. The post will reopen automatically after the remaining active members in this cohort finish.`;
+          await saveNotification(hire.trainer_user_id, trainerTitle, trainerBody, 'trainer_hire', {
+            screen: 'TrainerHireManagement',
+            params: { initialTab: 'past', hireId: hire.id },
+          });
+          if (hire.trainer_fcm_token) {
+            sendPushNotification(hire.trainer_fcm_token, trainerTitle, trainerBody, {
+              type: 'hire_ended',
+              hire_id: String(hire.id),
+              post_id: String(hire.post_id),
+            }).catch(err =>
+              console.error(`[CRON] FCM trainer public completion notif failed for hire ${hire.id}:`, err.message)
+            );
+          }
+        } catch (err) {
+          console.error(`[CRON] Failed to auto-end public hire ${hire.id}:`, err.message);
+        }
+      }
+    } catch (err) {
+      console.error('[CRON] Error in public hire completion job:', err.message);
+    }
   });
 
   // Runs daily at midnight — cohort program start: activate enrolled hires + close full posts past deadline
