@@ -128,14 +128,36 @@ function mapMidtransPaymentStatus(transactionStatus, fraudStatus) {
 }
 
 async function reconcilePendingTrainerHires(trainerId) {
+  return reconcilePendingHires({ trainerId });
+}
+
+async function reconcilePendingMemberHires(memberId) {
+  return reconcilePendingHires({ memberId });
+}
+
+async function reconcilePendingHires({ trainerId, memberId } = {}) {
+  const filters = [
+    `th.status = 'pending_payment'`,
+    `th.payment_order_id IS NOT NULL`,
+  ];
+  const params = [];
+
+  if (trainerId != null) {
+    filters.push('tp.trainer_id = ?');
+    params.push(trainerId);
+  }
+
+  if (memberId != null) {
+    filters.push('th.member_id = ?');
+    params.push(memberId);
+  }
+
   const [pendingHires] = await pool.query(
     `SELECT th.payment_order_id, tp.visibility
      FROM trainer_hires th
      JOIN trainer_posts tp ON tp.id = th.post_id
-     WHERE tp.trainer_id = ?
-       AND th.status = 'pending_payment'
-       AND th.payment_order_id IS NOT NULL`,
-    [trainerId],
+     WHERE ${filters.join(' AND ')}`,
+    params,
   );
 
   for (const hire of pendingHires) {
@@ -152,7 +174,7 @@ async function reconcilePendingTrainerHires(trainerId) {
           midtransStatus.fraud_status,
         );
 
-        await Payment.findOneAndUpdate(
+        payment = await Payment.findOneAndUpdate(
           {order_id: hire.payment_order_id},
           {
             status: paymentStatus,
@@ -161,6 +183,7 @@ async function reconcilePendingTrainerHires(trainerId) {
             updated_at: new Date(),
           },
         );
+        paymentStatus = payment?.status || paymentStatus;
       } catch (error) {
         console.error(
           '[Trainer] reconcilePendingTrainerHires Midtrans lookup failed:',
@@ -178,7 +201,11 @@ async function reconcilePendingTrainerHires(trainerId) {
       continue;
     }
 
-    if (['failed', 'expired'].includes(paymentStatus)) {
+    if (
+      ['failed', 'expired', 'refunded', 'partial_refund'].includes(
+        paymentStatus,
+      )
+    ) {
       await TrainerHire.cancelPendingPayment(hire.payment_order_id);
     }
   }
@@ -186,6 +213,20 @@ async function reconcilePendingTrainerHires(trainerId) {
 
 async function reconcileReadyEnrolledHires(filters = {}) {
   await TrainerHire.activateReadyEnrolledHires(filters);
+}
+
+function getReversalPaymentStatus(reversal) {
+  if (reversal.action === 'refunded') return 'refunded';
+  if (reversal.action === 'partial_refund') return 'partial_refund';
+  if (reversal.action === 'expire') return 'expired';
+  if (reversal.action === 'cancelled') return 'failed';
+
+  const txStatus = reversal.status?.transaction_status;
+  if (txStatus === 'refund') return 'refunded';
+  if (txStatus === 'partial_refund') return 'partial_refund';
+  if (txStatus === 'expire') return 'expired';
+  if (txStatus === 'settlement' || txStatus === 'capture') return 'settlement';
+  return 'failed';
 }
 
 async function getTrainerPostState(postId, trainerId) {
@@ -679,6 +720,7 @@ exports.hireTrainer = async (req, res) => {
 
 exports.getMyHires = async (req, res) => {
   try {
+    await reconcilePendingMemberHires(req.user.id);
     await reconcileReadyEnrolledHires({ memberId: req.user.id });
     const hires = await TrainerHire.findByMember(req.user.id);
     res.json(hires);
@@ -830,10 +872,7 @@ exports.declineHire = async (req, res) => {
       `Trainer declined hire ${hire.id}`
     );
 
-    let paymentStatus = 'failed';
-    if (reversal.action === 'refunded') paymentStatus = 'refunded';
-    if (reversal.action === 'partial_refund') paymentStatus = 'partial_refund';
-    if (reversal.action === 'expire') paymentStatus = 'expired';
+    const paymentStatus = getReversalPaymentStatus(reversal);
 
     await Payment.findOneAndUpdate({ order_id: hire.payment_order_id }, { status: paymentStatus, updated_at: new Date() });
     await TrainerHire.markCancelled(hire.id);
@@ -853,14 +892,27 @@ exports.declineHire = async (req, res) => {
     if (hireInfo) {
       const mTitle = 'Hire Request Declined';
       const paymentOutcome = paymentStatus === 'refunded'
-        ? 'Your payment has been refunded.'
-        : 'Your payment has been reversed.';
+        ? 'Your payment has been refunded through Midtrans.'
+        : paymentStatus === 'partial_refund'
+          ? 'Your payment has been partially refunded through Midtrans.'
+          : paymentStatus === 'settlement'
+            ? 'Midtrans still shows this payment as settled, so the refund must be handled manually.'
+            : 'Your payment has been reversed.';
       const mBody = `${hireInfo.trainer_name} declined your hire request for "${hireInfo.post_title}". ${paymentOutcome}`;
       await saveNotification(hireInfo.member_id, mTitle, mBody, 'trainer_hire');
       if (hireInfo.member_fcm) sendPushNotification(hireInfo.member_fcm, mTitle, mBody, {type: 'trainer_hire_declined'}).catch(() => {});
     }
 
-    res.json({ message: paymentStatus === 'refunded' ? 'Hire declined and payment refunded.' : 'Hire declined and payment reversed.' });
+    res.json({
+      message:
+        paymentStatus === 'refunded'
+          ? 'Hire declined and payment refunded.'
+          : paymentStatus === 'partial_refund'
+            ? 'Hire declined and payment partially refunded.'
+            : paymentStatus === 'settlement'
+              ? 'Hire declined. Midtrans still shows the payment as settled, so refund must be handled manually.'
+              : 'Hire declined and payment reversed.',
+    });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }

@@ -34,6 +34,35 @@ async function refundMidtransTransaction(orderId, reason) {
   return axios.post(`${MIDTRANS_BASE}/v2/${orderId}/refund`, payload, getMidtransAuth());
 }
 
+async function directRefundMidtransTransaction(orderId, statusSnapshot, reason) {
+  const payload = {
+    refund_key: `refund-${orderId}-${Date.now()}`,
+  };
+  const amount = Number(statusSnapshot?.gross_amount || 0);
+  if (Number.isFinite(amount) && amount > 0) {
+    payload.amount = String(Math.trunc(amount));
+  }
+  if (reason) payload.reason = reason;
+  return axios.post(
+    `${MIDTRANS_BASE}/v2/${orderId}/refund/online/direct`,
+    payload,
+    getMidtransAuth()
+  );
+}
+
+function canAutoRefundMidtransPayment(paymentType) {
+  return [
+    'credit_card',
+    'gopay',
+    'shopeepay',
+    'qris',
+    'dana',
+    'ovo',
+    'akulaku',
+    'kredivo',
+  ].includes(String(paymentType || '').toLowerCase());
+}
+
 async function reverseMidtransTransaction(orderId, reason) {
   const status = await getMidtransTransactionStatus(orderId);
   const txStatus = status.transaction_status;
@@ -46,12 +75,45 @@ async function reverseMidtransTransaction(orderId, reason) {
   }
 
   if (['capture', 'settlement'].includes(txStatus)) {
-    const response = await refundMidtransTransaction(orderId, reason);
-    return { action: 'refunded', status, response: response.data };
+    if (!canAutoRefundMidtransPayment(status.payment_type)) {
+      return {
+        action: 'manual_refund_required',
+        status,
+        reason: 'payment_type_not_auto_refundable',
+      };
+    }
+
+    const response = await directRefundMidtransTransaction(orderId, status, reason);
+    const verifiedStatus = await getMidtransTransactionStatus(orderId);
+    const verifiedTxStatus = verifiedStatus.transaction_status;
+
+    if (verifiedTxStatus === 'refund') {
+      return {action: 'refunded', status: verifiedStatus, response: response.data};
+    }
+
+    if (verifiedTxStatus === 'partial_refund') {
+      return {
+        action: 'partial_refund',
+        status: verifiedStatus,
+        response: response.data,
+      };
+    }
+
+    return {
+      action: 'manual_refund_required',
+      status: verifiedStatus,
+      response: response.data,
+      reason: 'refund_not_confirmed',
+    };
   }
 
   const response = await cancelMidtransTransaction(orderId);
-  return { action: 'cancelled', status, response: response.data };
+  const verifiedStatus = await getMidtransTransactionStatus(orderId).catch(() => null);
+  return {
+    action: verifiedStatus?.transaction_status === 'expire' ? 'expire' : 'cancelled',
+    status: verifiedStatus || status,
+    response: response.data,
+  };
 }
 
 module.exports = {
@@ -62,5 +124,6 @@ module.exports = {
   getMidtransTransactionStatus,
   cancelMidtransTransaction,
   refundMidtransTransaction,
+  directRefundMidtransTransaction,
   reverseMidtransTransaction,
 };

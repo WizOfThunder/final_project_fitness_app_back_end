@@ -116,17 +116,21 @@ exports.handleNotification = async (req, res) => {
     console.log('[Payment] status fetched:', notification.transaction_status, 'fraud:', notification.fraud_status);
     const { transaction_status, fraud_status, transaction_id, payment_type } = notification;
 
-    const status = mapMidtransPaymentStatus(transaction_status, fraud_status);
-
-    await Payment.findOneAndUpdate(
-      { order_id },
-      { status, transaction_id, payment_type, updated_at: new Date() }
+    const mappedStatus = mapMidtransPaymentStatus(
+      transaction_status,
+      fraud_status,
     );
+
+    const payment = await Payment.findOneAndUpdate(
+      { order_id },
+      { status: mappedStatus, transaction_id, payment_type, updated_at: new Date() }
+    );
+    const status = payment?.status || mappedStatus;
 
     if (order_id.startsWith('hire-')) {
       if (status === 'settlement') {
         await handleSettledTrainerHire(order_id);
-      } else if (['failed', 'expired'].includes(status)) {
+      } else if (['failed', 'expired', 'refunded', 'partial_refund'].includes(status)) {
         await TrainerHire.cancelPendingPayment(order_id);
       }
     }
@@ -229,8 +233,8 @@ exports.simulatePayment = async (req, res) => {
       getMidtransAuth()
     );
     console.log('[Payment] simulatePayment succeeded, status:', simRes.status);
-    await Payment.findOneAndUpdate({ order_id }, { status: 'settlement', updated_at: new Date() });
-    if (order_id.startsWith('hire-')) {
+    const payment = await Payment.findOneAndUpdate({ order_id }, { status: 'settlement', updated_at: new Date() });
+    if (order_id.startsWith('hire-') && payment?.status === 'settlement') {
       await handleSettledTrainerHire(order_id);
     }
     res.json({ message: 'Payment simulated successfully', order_id });

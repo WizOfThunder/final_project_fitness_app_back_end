@@ -1,5 +1,26 @@
 const { pool } = require('../../config/db');
 
+function resolvePaymentStatus(currentStatus, nextStatus) {
+  if (!nextStatus) {
+    return currentStatus || null;
+  }
+
+  if (!currentStatus || currentStatus === nextStatus) {
+    return nextStatus;
+  }
+
+  // Once the app has moved a settled payment into a refund state,
+  // do not let a late/out-of-order settlement callback regress it.
+  if (
+    ['refunded', 'partial_refund'].includes(currentStatus) &&
+    ['pending', 'settlement'].includes(nextStatus)
+  ) {
+    return currentStatus;
+  }
+
+  return nextStatus;
+}
+
 const Payment = {
   async create(data) {
     const [result] = await pool.query('INSERT INTO payments SET ?', [data]);
@@ -12,7 +33,14 @@ const Payment = {
   },
   async findOneAndUpdate(where, data) {
     const key = Object.keys(where)[0];
-    await pool.query(`UPDATE payments SET ? WHERE ${key} = ?`, [data, where[key]]);
+    const current = await Payment.findOne(where);
+    const nextData = {...data};
+
+    if (Object.prototype.hasOwnProperty.call(nextData, 'status')) {
+      nextData.status = resolvePaymentStatus(current?.status, nextData.status);
+    }
+
+    await pool.query(`UPDATE payments SET ? WHERE ${key} = ?`, [nextData, where[key]]);
     return Payment.findOne(where);
   },
   async find(where = {}) {

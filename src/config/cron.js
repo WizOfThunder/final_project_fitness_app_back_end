@@ -39,6 +39,20 @@ function getWeekStartWIB() {
     + String(monday.getUTCDate()).padStart(2, '0');
 }
 
+function getReversalPaymentStatus(reversal) {
+  if (reversal.action === 'refunded') return 'refunded';
+  if (reversal.action === 'partial_refund') return 'partial_refund';
+  if (reversal.action === 'expire') return 'expired';
+  if (reversal.action === 'cancelled') return 'failed';
+
+  const txStatus = reversal.status?.transaction_status;
+  if (txStatus === 'refund') return 'refunded';
+  if (txStatus === 'partial_refund') return 'partial_refund';
+  if (txStatus === 'expire') return 'expired';
+  if (txStatus === 'settlement' || txStatus === 'capture') return 'settlement';
+  return 'failed';
+}
+
 function parseDateOnly(value) {
   if (!value) return null;
 
@@ -241,10 +255,7 @@ function startCronJobs() {
             `Trainer response deadline expired for hire ${hire.id}`
           );
 
-          let paymentStatus = 'failed';
-          if (reversal.action === 'refunded') paymentStatus = 'refunded';
-          if (reversal.action === 'partial_refund') paymentStatus = 'partial_refund';
-          if (reversal.action === 'expire') paymentStatus = 'expired';
+          const paymentStatus = getReversalPaymentStatus(reversal);
 
           await Payment.findOneAndUpdate(
             { order_id: hire.payment_order_id },
@@ -256,7 +267,9 @@ function startCronJobs() {
 
           // Notify trainer — request expired without their action
           const trainerTitle = 'Hire Request Expired';
-          const trainerBody = `The hire request from ${hire.member_name} for "${hire.post_title}" has expired. The payment has been refunded.`;
+          const trainerBody = paymentStatus === 'settlement'
+            ? `The hire request from ${hire.member_name} for "${hire.post_title}" has expired. Midtrans still shows the payment as settled, so refund must be handled manually.`
+            : `The hire request from ${hire.member_name} for "${hire.post_title}" has expired. The payment has been refunded.`;
           await saveNotification(hire.trainer_user_id, trainerTitle, trainerBody, 'trainer_hire');
           if (hire.trainer_fcm_token) {
             sendPushNotification(hire.trainer_fcm_token, trainerTitle, trainerBody, { type: 'trainer_hire_expired' })
@@ -265,7 +278,9 @@ function startCronJobs() {
 
           // Notify member — their request expired, post is available again
           const memberTitle = 'Hire Request Expired';
-          const memberBody = `Your hire request for "${hire.post_title}" expired because the trainer did not respond in time. You can hire them again.`;
+          const memberBody = paymentStatus === 'settlement'
+            ? `Your hire request for "${hire.post_title}" expired because the trainer did not respond in time. Midtrans still shows the payment as settled, so refund must be handled manually before you hire again.`
+            : `Your hire request for "${hire.post_title}" expired because the trainer did not respond in time. You can hire them again.`;
           await saveNotification(hire.member_id, memberTitle, memberBody, 'trainer_hire');
           if (hire.member_fcm_token) {
             sendPushNotification(hire.member_fcm_token, memberTitle, memberBody, {
