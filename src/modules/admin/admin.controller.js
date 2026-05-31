@@ -114,8 +114,8 @@ exports.getStats = async (req, res) => {
       SELECT COALESCE(SUM(amount), 0) AS monthly_revenue
       FROM payments
       WHERE status = 'settlement'
-        AND updated_at >= DATE_TRUNC('month', ${WIB_CURRENT_TIMESTAMP_SQL})
-        AND updated_at < DATE_TRUNC('month', ${WIB_CURRENT_TIMESTAMP_SQL}) + INTERVAL '1 month'
+        AND (updated_at AT TIME ZONE 'Asia/Jakarta') >= DATE_TRUNC('month', ${WIB_CURRENT_TIMESTAMP_SQL})
+        AND (updated_at AT TIME ZONE 'Asia/Jakarta') < DATE_TRUNC('month', ${WIB_CURRENT_TIMESTAMP_SQL}) + INTERVAL '1 month'
     `);
 
     // ── User growth: new registrations per month last 6 months ──
@@ -132,13 +132,13 @@ exports.getStats = async (req, res) => {
     // ── Revenue trend: monthly revenue last 6 months ──
     const [revenueTrend] = await pool.query(`
       SELECT
-        TO_CHAR(DATE_TRUNC('month', updated_at), 'FMMon') AS month,
+        TO_CHAR(DATE_TRUNC('month', updated_at AT TIME ZONE 'Asia/Jakarta'), 'FMMon') AS month,
         COALESCE(SUM(amount), 0) AS total
       FROM payments
       WHERE status = 'settlement'
-        AND updated_at >= DATE_TRUNC('month', ${WIB_CURRENT_TIMESTAMP_SQL}) - INTERVAL '5 months'
-      GROUP BY DATE_TRUNC('month', updated_at)
-      ORDER BY DATE_TRUNC('month', updated_at)
+        AND (updated_at AT TIME ZONE 'Asia/Jakarta') >= DATE_TRUNC('month', ${WIB_CURRENT_TIMESTAMP_SQL}) - INTERVAL '5 months'
+      GROUP BY DATE_TRUNC('month', updated_at AT TIME ZONE 'Asia/Jakarta')
+      ORDER BY DATE_TRUNC('month', updated_at AT TIME ZONE 'Asia/Jakarta')
     `);
 
     // ── Weekly workout completions ──
