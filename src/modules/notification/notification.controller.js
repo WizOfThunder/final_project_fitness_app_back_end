@@ -159,6 +159,14 @@ exports.sendWeatherNotification = async (req, res) => {
     const coordinates = parseCoordinates(req.body);
     if (!coordinates) return res.status(400).json({ error: 'valid lat and lon are required' });
 
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (!['member', 'trainer'].includes(user.role)) {
+      return res.status(403).json({
+        error: 'Weather notifications are only available for members and trainers',
+      });
+    }
+
     await pool.query('UPDATE users SET last_lat = ?, last_lon = ? WHERE id = ?', [coordinates.lat, coordinates.lon, req.user.id]);
 
     const weatherRes = await axios.get('https://api.openweathermap.org/data/2.5/weather', {
@@ -166,8 +174,7 @@ exports.sendWeatherNotification = async (req, res) => {
     });
 
     const advice = getWeatherAdvice(weatherRes.data);
-    const user = await User.findById(req.user.id);
-    if (!user || !user.fcm_token) return res.status(404).json({ error: 'FCM token not found' });
+    if (!user.fcm_token) return res.status(404).json({ error: 'FCM token not found' });
 
     await sendPushNotification(user.fcm_token, advice.title, advice.body, {type: 'weather', outdoor: String(advice.outdoor)});
     await saveNotification(req.user.id, advice.title, advice.body, 'general');

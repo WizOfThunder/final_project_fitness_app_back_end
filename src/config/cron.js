@@ -134,12 +134,12 @@ function startCronJobs() {
   pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_prefs TEXT NULL').catch(() => {});
   pool.query('ALTER TABLE achievements ADD COLUMN IF NOT EXISTS icon VARCHAR(100) NULL').catch(() => {});
 
-  // ── 8AM WIB daily — weather notification to all users with FCM token + location ──
+  // ── 8AM WIB daily — weather notification to members/trainers with FCM token + location ──
   cron.schedule('0 8 * * *', async () => {
     console.log('[CRON] Sending morning weather notifications...');
     try {
       const [users] = await pool.query(
-        "SELECT id, fcm_token, last_lat, last_lon, notification_prefs FROM users WHERE fcm_token IS NOT NULL AND fcm_token <> '' AND last_lat IS NOT NULL AND last_lon IS NOT NULL"
+        "SELECT id, fcm_token, last_lat, last_lon, notification_prefs FROM users WHERE role IN ('member', 'trainer') AND fcm_token IS NOT NULL AND fcm_token <> '' AND last_lat IS NOT NULL AND last_lon IS NOT NULL"
       );
       for (const user of users) {
         try {

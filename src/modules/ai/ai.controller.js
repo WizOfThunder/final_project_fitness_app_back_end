@@ -620,6 +620,8 @@ function normalizeDietSurveyData(body = {}) {
     dietType: typeof body.dietType === 'string' ? body.dietType.trim() : body.dietType,
     preferredCuisines: sanitizedPreferredCuisines,
     planDays,
+    availableIngredients: normalizeDietPreferenceList(body.availableIngredients),
+    availableTools: normalizeDietPreferenceList(body.availableTools),
     allergiesOther:
       typeof body.allergiesOther === 'string'
         ? body.allergiesOther.trim()
@@ -677,6 +679,53 @@ const CUSTOM_ALLERGY_SYNONYM_GROUPS = [
   ['chili', 'chilli'],
   ['soy', 'tofu', 'soy sauce', 'edamame'],
 ];
+const OPTIONAL_DIET_PREFERENCE_EMPTY_VALUES = new Set([
+  'none',
+  'no',
+  'n/a',
+  'na',
+  'not sure',
+  'unsure',
+]);
+const AVAILABLE_TOOL_SYNONYM_GROUPS = [
+  ['stove', 'stovetop', 'pan', 'skillet', 'pot', 'saucepan', 'wok'],
+  ['oven', 'bake', 'baked', 'roast', 'roasted', 'broil'],
+  ['microwave'],
+  ['blender', 'blend', 'blended'],
+  ['air fryer', 'airfryer'],
+  ['grill', 'grilled', 'griddle'],
+  ['slow cooker', 'crockpot'],
+];
+const RECIPE_TOOL_HINTS = [
+  {
+    label: 'stove',
+    pattern: /\b(stove|stovetop|skillet|pan|pot|saucepan|wok|boil|simmer|saute|stir(?: |-)?fry)\b/,
+  },
+  {
+    label: 'oven',
+    pattern: /\b(oven|bake|baked|roast|roasted|broil|preheat)\b/,
+  },
+  {
+    label: 'microwave',
+    pattern: /\bmicrowave\b/,
+  },
+  {
+    label: 'blender',
+    pattern: /\b(blender|blend|blended)\b/,
+  },
+  {
+    label: 'air fryer',
+    pattern: /\bair ?fryer\b/,
+  },
+  {
+    label: 'grill',
+    pattern: /\b(grill|grilled|griddle)\b/,
+  },
+  {
+    label: 'slow cooker',
+    pattern: /\b(slow cooker|crockpot)\b/,
+  },
+];
 
 const RECIPE_STRICT_SNACK_PATTERN = /\b(smoothie|shake|juice)\b/;
 const RECIPE_SNACK_PATTERN = /\b(bars?|bites?|trail mix|parfait|muffin|cookie|brownie|fruit cup|energy balls?|protein balls?)\b/;
@@ -698,6 +747,42 @@ function buildRecipeIngredientText(recipe) {
     .filter(Boolean)
     .join(' ')
     .toLowerCase();
+}
+
+function summarizeRecipeIngredients(recipe, limit = 6) {
+  if (!Array.isArray(recipe.ingredients)) return '';
+
+  return recipe.ingredients
+    .map(ingredient => {
+      if (typeof ingredient === 'string') return ingredient;
+      return typeof ingredient?.name === 'string' ? ingredient.name : '';
+    })
+    .map(name => String(name).trim())
+    .filter(Boolean)
+    .slice(0, limit)
+    .join(', ');
+}
+
+function buildRecipePreparationText(recipe) {
+  const title = String(recipe?.title || '').toLowerCase();
+  const tags = Array.isArray(recipe?.tags)
+    ? recipe.tags.map(tag => String(tag).toLowerCase()).join(' ')
+    : '';
+  const instructions = Array.isArray(recipe?.instructions)
+    ? recipe.instructions.map(step => String(step).toLowerCase()).join(' ')
+    : typeof recipe?.instructions === 'string'
+    ? recipe.instructions.toLowerCase()
+    : '';
+
+  return `${title} ${tags} ${instructions}`.trim();
+}
+
+function extractRecipeToolHints(recipe) {
+  const text = buildRecipePreparationText(recipe);
+
+  return RECIPE_TOOL_HINTS
+    .filter(tool => tool.pattern.test(text))
+    .map(tool => tool.label);
 }
 
 function buildRecipeUsageText(recipe) {
@@ -730,15 +815,41 @@ function isSnackMealType(mealType) {
   );
 }
 
-function normalizeDelimitedTextList(value) {
+function splitDelimitedTextList(value) {
   if (typeof value !== 'string') return [];
 
   return value
-    .toLowerCase()
-    .replace(/\band\b/g, ',')
+    .replace(/\band\b/gi, ',')
     .split(/[,\n;/]+/)
     .map(entry => entry.trim().replace(/\s+/g, ' '))
     .filter(Boolean);
+}
+
+function normalizeDelimitedTextList(value) {
+  return splitDelimitedTextList(value).map(entry => entry.toLowerCase());
+}
+
+function normalizeDietPreferenceList(value) {
+  const entries = Array.isArray(value)
+    ? value.flatMap(entry => splitDelimitedTextList(entry))
+    : splitDelimitedTextList(value);
+  const seen = new Set();
+
+  return entries
+    .filter(entry => {
+      const normalized = entry.toLowerCase();
+      if (!normalized || OPTIONAL_DIET_PREFERENCE_EMPTY_VALUES.has(normalized)) {
+        return false;
+      }
+
+      if (seen.has(normalized)) {
+        return false;
+      }
+
+      seen.add(normalized);
+      return true;
+    })
+    .slice(0, 20);
 }
 
 function normalizeCustomAllergyTerms(value) {
@@ -844,16 +955,94 @@ function scoreRecipe(recipe, goalType) {
   return score;
 }
 
+function buildSoftPreferencePatterns(values = []) {
+  return values.map(value => ({
+    value: String(value).toLowerCase(),
+    pattern: new RegExp(`\\b${escapeRegExp(String(value).toLowerCase())}\\b`),
+  }));
+}
+
+function buildToolPreferencePatterns(values = []) {
+  const expandedTerms = new Set();
+
+  for (const rawValue of values) {
+    const normalized = String(rawValue || '').trim().toLowerCase();
+    if (!normalized) continue;
+
+    expandedTerms.add(normalized);
+    for (const group of AVAILABLE_TOOL_SYNONYM_GROUPS) {
+      if (group.includes(normalized)) {
+        group.forEach(alias => expandedTerms.add(alias));
+      }
+    }
+  }
+
+  return buildSoftPreferencePatterns(
+    Array.from(expandedTerms).sort((a, b) => b.length - a.length),
+  );
+}
+
+function countPatternMatches(text, patterns = []) {
+  if (!text || patterns.length === 0) return 0;
+
+  let matches = 0;
+  for (const {pattern} of patterns) {
+    if (pattern.test(text)) {
+      matches += 1;
+    }
+  }
+
+  return matches;
+}
+
+function scoreRecipeIngredientPreference(recipe, patterns = []) {
+  if (patterns.length === 0) return 0;
+
+  const matches = countPatternMatches(buildRecipeIngredientText(recipe), patterns);
+  if (matches === 0) return 0;
+
+  return matches * 14 + (matches / patterns.length) * 18;
+}
+
+function scoreRecipeToolPreference(recipe, patterns = []) {
+  if (patterns.length === 0) return 0;
+
+  const matches = countPatternMatches(buildRecipePreparationText(recipe), patterns);
+  if (matches === 0) return 0;
+
+  return matches * 8;
+}
+
 function selectRecipes(allRecipes, criteria) {
   const filtered = filterRecipes(allRecipes, criteria);
   const goalType = normalizeDietGoal(criteria.goal, criteria.dietType);
+  const ingredientPreferencePatterns = buildSoftPreferencePatterns(
+    criteria.availableIngredients || [],
+  );
+  const toolPreferencePatterns = buildToolPreferencePatterns(
+    criteria.availableTools || [],
+  );
 
   return filtered
-    .map(recipe => ({
-      ...recipe,
-      _usageKind: classifyRecipeUsage(recipe),
-      _selectionScore: scoreRecipe(recipe, goalType),
-    }))
+    .map(recipe => {
+      const ingredientPreferenceScore = scoreRecipeIngredientPreference(
+        recipe,
+        ingredientPreferencePatterns,
+      );
+      const toolPreferenceScore = scoreRecipeToolPreference(
+        recipe,
+        toolPreferencePatterns,
+      );
+
+      return {
+        ...recipe,
+        _usageKind: classifyRecipeUsage(recipe),
+        _selectionScore:
+          scoreRecipe(recipe, goalType)
+          + ingredientPreferenceScore
+          + toolPreferenceScore,
+      };
+    })
     .sort((a, b) => {
       if (b._selectionScore !== a._selectionScore) {
         return b._selectionScore - a._selectionScore;
@@ -1321,6 +1510,8 @@ function buildDietPrompt(user, surveyData, recipes, location, previousPlan) {
     allergiesOther,
     mealsPerDay,
     prepTime,
+    availableIngredients,
+    availableTools,
     flexibleMealPreference,
     flexibleMealDetails,
     additionalNote,
@@ -1346,6 +1537,14 @@ function buildDietPrompt(user, surveyData, recipes, location, previousPlan) {
           flexibleMealDetails ? ` (${flexibleMealDetails})` : ''
         }`
       : null;
+  const preferredIngredients = Array.isArray(availableIngredients)
+    ? availableIngredients.filter(Boolean)
+    : [];
+  const preferredTools = Array.isArray(availableTools)
+    ? availableTools.filter(Boolean)
+    : [];
+  const hasPracticalPreferenceHints =
+    preferredIngredients.length > 0 || preferredTools.length > 0;
 
   const MEAL_SETS = {
     2: ['breakfast', 'dinner'],
@@ -1355,9 +1554,16 @@ function buildDietPrompt(user, surveyData, recipes, location, previousPlan) {
   };
   const MEAL_TYPES = MEAL_SETS[mealsCount] || MEAL_SETS[3];
 
-  const recipeData = recipes.map(r =>
-    `id:${r.id} | kind:${r._usageKind || 'meal'} | ${r.title} | cal:${r.calories} | protein:${r.protein}g | carbs:${r.carbs}g | fat:${r.fat}g | prep:${r.ready_in_minutes}min`
-  ).join('\n');
+  const recipeData = recipes.map(r => {
+    const ingredientSummary = hasPracticalPreferenceHints
+      ? summarizeRecipeIngredients(r)
+      : '';
+    const toolSummary = hasPracticalPreferenceHints
+      ? extractRecipeToolHints(r).join(', ')
+      : '';
+
+    return `id:${r.id} | kind:${r._usageKind || 'meal'} | ${r.title} | cal:${r.calories} | protein:${r.protein}g | carbs:${r.carbs}g | fat:${r.fat}g | prep:${r.ready_in_minutes}min${ingredientSummary ? ` | ingredients:${ingredientSummary}` : ''}${toolSummary ? ` | tools:${toolSummary}` : ''}`;
+  }).join('\n');
 
   const outputFormat = plannedDays.map(day =>
     MEAL_TYPES.map(meal => `- day: ${day}, meal_type: ${meal}, recipe_id: <number>`).join('\n')
@@ -1380,6 +1586,8 @@ User profile:
 - Allergies: ${allergyStr}
 - Meals per day: ${mealsCount}
 - Prep time available: ${prepTime || 'no limit'}
+- Available ingredients to prefer when practical: ${preferredIngredients.length ? preferredIngredients.join(', ') : 'not provided'}
+- Available cooking tools to prefer when practical: ${preferredTools.length ? preferredTools.join(', ') : 'not provided'}
 - Meal plan days: ${planDayLabels.join(', ')}
 ${legacyFlexibilityLine ? `- Flexibility preference: ${legacyFlexibilityLine}
 ` : ''}${skippedDayLabels.length ? `- Days without planned meals: ${skippedDayLabels.join(', ')}
@@ -1402,6 +1610,7 @@ Rules:
 - Each planned day must have exactly ${mealsCount} meals: ${MEAL_TYPES.join(', ')}
 - Vary recipes across days, avoid repeating the same recipe more than twice
 - Respect the user's diet type and allergies
+- If available ingredients or cooking tools are provided, treat them as soft preferences: prefer practical matches when possible, but do not narrow the plan unnecessarily or ignore better overall fits.
 - Recipes marked kind:snack should only be assigned to snack, morning_snack, or afternoon_snack
 - For breakfast, lunch, and dinner, prefer recipes marked kind:meal
 - Omit all non-selected days entirely from the plan output.
@@ -1451,6 +1660,8 @@ async function runDietGeneration(userId, surveyData) {
     allergiesOther,
     preferredCuisines,
     prepTime,
+    availableIngredients,
+    availableTools,
     latitude,
     longitude,
   } = surveyData;
@@ -1476,6 +1687,8 @@ async function runDietGeneration(userId, surveyData) {
     allergiesOther,
     preferredCuisines,
     prepTime,
+    availableIngredients,
+    availableTools,
   });
   if (filtered.length === 0) {
     throw new Error('No matching recipes found for your profile');
