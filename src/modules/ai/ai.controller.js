@@ -21,7 +21,10 @@ const DietPlan = require('./diet.model');
 const User = require('../users/user.model');
 const Exercise = require('../exercises/exercise.model');
 const { askGemini } = require('../../config/gemini');
+const { pool } = require('../../config/db');
 const {enqueueJob, getJob, serializeJob} = require('./aiQueue');
+
+const WIB_CURRENT_DATE_SQL = `(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Jakarta')::date`;
 
 const WORKOUT_REGEN_REASONS = {
   too_hard: 'Too hard',
@@ -600,6 +603,80 @@ function buildWorkoutSurveyInputForStorage(surveyData) {
   return surveyInput;
 }
 
+function formatPromptDate(value) {
+  return value ? String(value).slice(0, 10) : null;
+}
+
+async function getRecentWorkoutActivitySummary(userId) {
+  const [[summary]] = await pool.query(`
+    SELECT
+      COUNT(*) AS synced_days,
+      MAX(date) AS last_synced_date,
+      COALESCE(ROUND(AVG(steps)), 0) AS avg_steps,
+      COALESCE(SUM(exercise_minutes), 0) AS total_exercise_minutes,
+      COUNT(*) FILTER (WHERE sleep_hours > 0) AS sleep_days,
+      COALESCE(ROUND(AVG(NULLIF(sleep_hours, 0)), 1), 0) AS avg_sleep_hours,
+      COALESCE(SUM(CASE WHEN workout_completed = TRUE THEN 1 ELSE 0 END), 0) AS workout_completed_days
+    FROM activity_logs
+    WHERE user_id = ?
+      AND date >= ${WIB_CURRENT_DATE_SQL} - INTERVAL '6 days'
+      AND date <= ${WIB_CURRENT_DATE_SQL}
+  `, [userId]);
+
+  const syncedDays = Number(summary?.synced_days) || 0;
+  if (!syncedDays) {
+    return '';
+  }
+
+  const sleepDays = Number(summary.sleep_days) || 0;
+  const avgSleepHours = Number(summary.avg_sleep_hours) || 0;
+
+  return [
+    'Recent 7-day activity summary from app activity logs:',
+    `- Synced days: ${syncedDays}/7`,
+    `- Last sync date: ${formatPromptDate(summary.last_synced_date) || 'unknown'}`,
+    `- Avg steps on synced days: ${Math.round(Number(summary.avg_steps) || 0)}`,
+    `- Total exercise minutes: ${Math.round(Number(summary.total_exercise_minutes) || 0)}`,
+    sleepDays > 0
+      ? `- Avg sleep on days with sleep data: ${avgSleepHours.toFixed(1)} hours`
+      : '- Avg sleep on days with sleep data: not enough data',
+    `- Workout-complete days: ${Number(summary.workout_completed_days) || 0}/7`,
+  ].join('\n');
+}
+
+async function getRecentDietActivityNote(userId) {
+  const [[summary]] = await pool.query(`
+    SELECT
+      COUNT(*) AS synced_days,
+      COALESCE(SUM(exercise_minutes), 0) AS total_exercise_minutes,
+      COUNT(*) FILTER (WHERE sleep_hours > 0) AS sleep_days,
+      COALESCE(ROUND(AVG(NULLIF(sleep_hours, 0)), 1), 0) AS avg_sleep_hours,
+      COALESCE(SUM(CASE WHEN workout_completed = TRUE THEN 1 ELSE 0 END), 0) AS workout_completed_days
+    FROM activity_logs
+    WHERE user_id = ?
+      AND date >= ${WIB_CURRENT_DATE_SQL} - INTERVAL '6 days'
+      AND date <= ${WIB_CURRENT_DATE_SQL}
+  `, [userId]);
+
+  const syncedDays = Number(summary?.synced_days) || 0;
+  if (!syncedDays) {
+    return '';
+  }
+
+  const sleepDays = Number(summary.sleep_days) || 0;
+  const avgSleepHours = Number(summary.avg_sleep_hours) || 0;
+
+  return [
+    'Recent 7-day activity note from app activity logs:',
+    `- Synced days: ${syncedDays}/7`,
+    `- Total exercise minutes: ${Math.round(Number(summary.total_exercise_minutes) || 0)}`,
+    sleepDays > 0
+      ? `- Avg sleep on days with sleep data: ${avgSleepHours.toFixed(1)} hours`
+      : '- Avg sleep on days with sleep data: not enough data',
+    `- Workout-complete days: ${Number(summary.workout_completed_days) || 0}/7`,
+  ].join('\n');
+}
+
 function normalizeDietSurveyData(body = {}) {
   const preferredCuisines = Array.isArray(body.preferredCuisines)
     ? body.preferredCuisines
@@ -1168,7 +1245,7 @@ Important regeneration rules:
 `;
 }
 
-function buildPrompt(user, surveyData, exercises, previousPlan) {
+function buildPrompt(user, surveyData, exercises, previousPlan, activitySummary) {
   const {
     goal,
     fitnessLevel,
@@ -1252,6 +1329,7 @@ User profile:
 - Medication/substance factors affecting training: ${medicationStr}
 ${safetyGuidance ? `- Safety priorities: ${safetyGuidance}
 ` : ''}${additionalNote ? `- Additional note: ${additionalNote}
+` : ''}${activitySummary ? `${activitySummary}
 ` : ''}
 
 Exercise data:
@@ -1269,6 +1347,7 @@ Rules:
 - Each day should contain 3-5 exercises
 - The exercise pool already removes clear safety conflicts; still follow the safety priorities above when assigning volume and intensity.
 - If medication/substance factors are present, keep the plan safety-first and avoid unnecessarily extreme intensity, volume, or conditioning demands.
+- ${activitySummary ? 'Use the recent activity summary only as soft context for recovery, adherence, and progression; if synced days are limited, avoid over-correcting the plan based on it.' : 'Keep the plan realistic for the user\'s current recovery, adherence, and progression level.'}
 - For timed exercises (planks, holds), set reps to 0 and duration to seconds (e.g. 30)
 - For rep-based exercises, set duration to 0
 - Do not repeat the same exercise too frequently
@@ -1326,11 +1405,13 @@ async function runWorkoutGeneration(userId, surveyData) {
     ? days.map(d => d.toLowerCase())
     : DAYS.slice(0, 5).map(d => d.toLowerCase());
 
-  const previousPlan = surveyData.previousPlanId
-    ? await WorkoutPlan.findById(surveyData.previousPlanId)
-    : null;
-
-  const allExercises = await Exercise.find({}, 'id name muscle equipment difficulty');
+  const [previousPlan, allExercises, activitySummary] = await Promise.all([
+    surveyData.previousPlanId
+      ? WorkoutPlan.findById(surveyData.previousPlanId)
+      : Promise.resolve(null),
+    Exercise.find({}, 'id name muscle equipment difficulty'),
+    getRecentWorkoutActivitySummary(userId),
+  ]);
   const filtered = selectExercises(
     allExercises,
     {
@@ -1351,7 +1432,7 @@ async function runWorkoutGeneration(userId, surveyData) {
     throw new Error('No matching exercises found for your profile');
   }
 
-  const prompt = buildPrompt(user, surveyData, filtered, previousPlan);
+  const prompt = buildPrompt(user, surveyData, filtered, previousPlan, activitySummary);
   console.log('Prompt preview:', prompt.slice(0, 300));
 
   let raw;
@@ -1502,7 +1583,7 @@ function filterRecipes(
   });
 }
 
-function buildDietPrompt(user, surveyData, recipes, location, previousPlan) {
+function buildDietPrompt(user, surveyData, recipes, location, previousPlan, activityNote) {
   const {
     goal,
     dietType,
@@ -1593,6 +1674,7 @@ ${legacyFlexibilityLine ? `- Flexibility preference: ${legacyFlexibilityLine}
 ` : ''}${skippedDayLabels.length ? `- Days without planned meals: ${skippedDayLabels.join(', ')}
 ` : ''}
 ${additionalNote ? `- Additional note: ${additionalNote}
+` : ''}${activityNote ? `${activityNote}
 ` : ''}
 
 Recipe data:
@@ -1619,6 +1701,7 @@ Rules:
 - For "1 flexible day per week" with no custom day specified, default to Saturday.
 - Legacy flexibility handling must still use only the provided recipes and should not turn the whole week off-plan.
 - Only assign solid food meals for breakfast, lunch, and dinner — drinks, smoothies, shakes, or juices should only be assigned as snacks if appropriate
+- ${activityNote ? 'Use the recent activity note only as soft context for recovery and practicality. Do not aggressively change meal strictness or infer precise calorie needs from it.' : 'Keep the meal plan practical and sustainable for the user\'s likely recovery and adherence level.'}
 
 Output format STRICTLY (no extra text, no markdown):
 ${outputFormat}`;
@@ -1672,9 +1755,12 @@ async function runDietGeneration(userId, surveyData) {
     : {city: null, country: null};
   console.log('[Diet] location:', location);
 
-  const previousPlan = surveyData.previousPlanId
-    ? await DietPlan.findById(surveyData.previousPlanId)
-    : null;
+  const [previousPlan, activityNote] = await Promise.all([
+    surveyData.previousPlanId
+      ? DietPlan.findById(surveyData.previousPlanId)
+      : Promise.resolve(null),
+    getRecentDietActivityNote(userId),
+  ]);
   const plannedDays = getDietPlanDays(surveyData);
   const plannedDaySet = new Set(plannedDays.map(formatPlanDay));
 
@@ -1700,6 +1786,7 @@ async function runDietGeneration(userId, surveyData) {
     filtered,
     location,
     previousPlan,
+    activityNote,
   );
   console.log('[Diet] Input surveyData:', JSON.stringify(surveyData, null, 2));
   console.log('[Diet] Prompt preview:', prompt.slice(0, 300));
