@@ -4,6 +4,46 @@ const WIB_CURRENT_TIMESTAMP_SQL = `(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Jakarta
 const WIB_CURRENT_DATE_SQL = `(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Jakarta')::date`;
 const { getMidtransTransactionStatus } = require('../../config/midtrans');
 
+function parseNotificationData(value) {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return null;
+  }
+}
+
+function buildAdminActivityEventKey(row, data) {
+  if (data?.event_key) {
+    return String(data.event_key);
+  }
+
+  const createdAt = row.created_at ? new Date(row.created_at) : null;
+  const timestampKey = Number.isFinite(createdAt?.getTime?.())
+    ? createdAt.toISOString().slice(0, 19)
+    : String(row.created_at || '');
+
+  return `${row.type}:${row.title}:${row.message}:${timestampKey}`;
+}
+
+function buildAdminActivityRow(row) {
+  const data = parseNotificationData(row.data);
+
+  return {
+    eventKey: buildAdminActivityEventKey(row, data),
+    activity: {
+      title: row.title,
+      message: row.message,
+      type: row.type,
+      created_at: row.created_at,
+      user_name: data?.actor_name || row.recipient_name || 'System',
+      user_role: data?.actor_role || row.recipient_role || 'system',
+    },
+  };
+}
+
 const adminTransactionSelect = `
   SELECT
     p.id,
@@ -151,64 +191,46 @@ exports.getStats = async (req, res) => {
     `);
 
     // ── Recent activity: last 10 admin-relevant notifications ──
-    try {
-      
-    const [recentActivity] = await pool.query(`
-      WITH admin_notifications AS (
-        SELECT
-          n.id,
-          n.title,
-          n.message,
-          n.type,
-          n.created_at,
-          COALESCE(n.data::jsonb ->> 'actor_name', recipient.name, 'System') AS user_name,
-          COALESCE(n.data::jsonb ->> 'actor_role', recipient.role, 'system') AS user_role,
-          COALESCE(
-            n.data::jsonb ->> 'event_key',
-            CONCAT(
-              n.type,
-              ':',
-              n.title,
-              ':',
-              n.message,
-              ':',
-              TO_CHAR(DATE_TRUNC('second', n.created_at), 'YYYY-MM-DD HH24:MI:SS')
-            )
-          ) AS event_key
-        FROM notifications n
-        JOIN users recipient ON recipient.id = n.user_id
-        WHERE recipient.role = 'admin'
-          AND (
-            (n.type = 'dispute' AND n.title = 'New Hire Dispute')
-            OR (n.type = 'general' AND n.title = 'New Trainer Registration')
-            OR n.type IN (
-              'admin_validation_request',
-              'admin_challenge_submission',
-              'admin_challenge_review'
-            )
+    const [recentActivityRows] = await pool.query(`
+      SELECT
+        n.id,
+        n.title,
+        n.message,
+        n.type,
+        n.data,
+        n.created_at,
+        recipient.name AS recipient_name,
+        recipient.role AS recipient_role
+      FROM notifications n
+      JOIN users recipient ON recipient.id = n.user_id
+      WHERE recipient.role = 'admin'
+        AND (
+          (n.type = 'dispute' AND n.title = 'New Hire Dispute')
+          OR (n.type = 'general' AND n.title = 'New Trainer Registration')
+          OR n.type IN (
+            'admin_validation_request',
+            'admin_challenge_submission',
+            'admin_challenge_review'
           )
-      )
-      SELECT title, message, type, created_at, user_name, user_role
-      FROM (
-        SELECT DISTINCT ON (event_key)
-          id,
-          title,
-          message,
-          type,
-          created_at,
-          user_name,
-          user_role,
-          event_key
-        FROM admin_notifications
-        ORDER BY event_key, created_at DESC, id DESC
-      ) deduped
-      ORDER BY created_at DESC
-      LIMIT 10
+        )
+      ORDER BY n.created_at DESC, n.id DESC
+      LIMIT 100
     `);
-      console.log("success");
-    } catch (error) {
-      console.log("fail");
-      console.log(error);
+
+    const seenAdminActivityKeys = new Set();
+    const recentActivity = [];
+    for (const row of recentActivityRows) {
+      const { eventKey, activity } = buildAdminActivityRow(row);
+      if (seenAdminActivityKeys.has(eventKey)) {
+        continue;
+      }
+
+      seenAdminActivityKeys.add(eventKey);
+      recentActivity.push(activity);
+
+      if (recentActivity.length >= 10) {
+        break;
+      }
     }
 
     res.json({

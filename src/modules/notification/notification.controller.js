@@ -5,6 +5,19 @@ const axios = require('axios');
 const { pool } = require('../../config/db');
 const { getWeatherAdvice } = require('../../config/cron');
 
+const ADMIN_NOTIFICATION_FILTER_SQL = `
+  user_id = ?
+  AND (
+    (type = 'dispute' AND title = 'New Hire Dispute')
+    OR (type = 'general' AND title = 'New Trainer Registration')
+    OR type IN (
+      'admin_validation_request',
+      'admin_challenge_submission',
+      'admin_challenge_review'
+    )
+  )
+`;
+
 function parseNotificationData(value) {
   if (!value) {
     return null;
@@ -54,8 +67,9 @@ function parseCoordinates(body) {
 
 exports.getMyNotifications = async (req, res) => {
   try {
+    const isAdmin = req.user?.role === 'admin';
     const [rows] = await pool.query(
-      'SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50',
+      `SELECT * FROM notifications WHERE ${isAdmin ? ADMIN_NOTIFICATION_FILTER_SQL : 'user_id = ?'} ORDER BY created_at DESC LIMIT 50`,
       [req.user.id]
     );
     res.json(
@@ -71,7 +85,11 @@ exports.getMyNotifications = async (req, res) => {
 
 exports.markAllRead = async (req, res) => {
   try {
-    await pool.query('UPDATE notifications SET is_read = TRUE WHERE user_id = ?', [req.user.id]);
+    const isAdmin = req.user?.role === 'admin';
+    await pool.query(
+      `UPDATE notifications SET is_read = TRUE WHERE ${isAdmin ? ADMIN_NOTIFICATION_FILTER_SQL : 'user_id = ?'}`,
+      [req.user.id],
+    );
     res.json({ message: 'All notifications marked as read' });
   } catch (error) {
     res.status(400).json({ error: error.message });
