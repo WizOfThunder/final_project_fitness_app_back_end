@@ -150,12 +150,57 @@ exports.getStats = async (req, res) => {
       GROUP BY day
     `);
 
-    // ── Recent activity: last 10 notifications ──
+    // ── Recent activity: last 10 admin-relevant notifications ──
     const [recentActivity] = await pool.query(`
-      SELECT n.title, n.message, n.type, n.created_at, u.name AS user_name, u.role AS user_role
-      FROM notifications n
-      JOIN users u ON u.id = n.user_id
-      ORDER BY n.created_at DESC
+      WITH admin_notifications AS (
+        SELECT
+          n.id,
+          n.title,
+          n.message,
+          n.type,
+          n.created_at,
+          COALESCE(n.data::jsonb ->> 'actor_name', recipient.name, 'System') AS user_name,
+          COALESCE(n.data::jsonb ->> 'actor_role', recipient.role, 'system') AS user_role,
+          COALESCE(
+            n.data::jsonb ->> 'event_key',
+            CONCAT(
+              n.type,
+              ':',
+              n.title,
+              ':',
+              n.message,
+              ':',
+              TO_CHAR(DATE_TRUNC('second', n.created_at), 'YYYY-MM-DD HH24:MI:SS')
+            )
+          ) AS event_key
+        FROM notifications n
+        JOIN users recipient ON recipient.id = n.user_id
+        WHERE recipient.role = 'admin'
+          AND (
+            (n.type = 'dispute' AND n.title = 'New Hire Dispute')
+            OR (n.type = 'general' AND n.title = 'New Trainer Registration')
+            OR n.type IN (
+              'admin_validation_request',
+              'admin_challenge_submission',
+              'admin_challenge_review'
+            )
+          )
+      )
+      SELECT title, message, type, created_at, user_name, user_role
+      FROM (
+        SELECT DISTINCT ON (event_key)
+          id,
+          title,
+          message,
+          type,
+          created_at,
+          user_name,
+          user_role,
+          event_key
+        FROM admin_notifications
+        ORDER BY event_key, created_at DESC, id DESC
+      ) deduped
+      ORDER BY created_at DESC, id DESC
       LIMIT 10
     `);
 

@@ -158,7 +158,10 @@ exports.createDispute = async (req, res) => {
     if (!reason) return res.status(400).json({ error: 'Reason is required' });
 
     const [[hire]] = await pool.query(
-      'SELECT * FROM trainer_hires WHERE id = ? AND member_id = ? AND status = ?',
+      `SELECT th.*, member.name AS member_name
+       FROM trainer_hires th
+       JOIN users member ON member.id = th.member_id
+       WHERE th.id = ? AND th.member_id = ? AND th.status = ?`,
       [hireId, req.user.id, 'active']
     );
     if (!hire) return res.status(404).json({ error: 'Active hire not found' });
@@ -182,11 +185,24 @@ exports.createDispute = async (req, res) => {
 
     // Notify admins
     const [admins] = await pool.query("SELECT id, fcm_token FROM users WHERE role = 'admin'");
+    const disputeTitle = 'New Hire Dispute';
+    const disputeBody = `${hire.member_name || 'A member'} raised a dispute: ${reason}`;
+    const notificationData = {
+      screen: 'AdminDisputes',
+      params: {},
+      intent: 'admin_dispute',
+      actor_name: hire.member_name || 'Member',
+      actor_role: 'member',
+      dispute_id: Number(dispute.id),
+      event_key: `admin:dispute:${dispute.id}`,
+    };
     for (const admin of admins) {
-      await saveNotification(admin.id, 'New Hire Dispute', `A member raised a dispute: ${reason}`, 'dispute');
+      await saveNotification(admin.id, disputeTitle, disputeBody, 'dispute', notificationData);
       if (admin.fcm_token) {
-        sendPushNotification(admin.fcm_token, 'New Hire Dispute', `A member raised a dispute: ${reason}`, {
-          type: 'dispute', dispute_id: String(dispute.id),
+        sendPushNotification(admin.fcm_token, disputeTitle, disputeBody, {
+          type: 'dispute',
+          dispute_id: String(dispute.id),
+          actor_name: hire.member_name || 'Member',
         }).catch(() => {});
       }
     }

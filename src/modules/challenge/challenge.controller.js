@@ -45,6 +45,21 @@ function hasTimePassedWib(timeStr) {
   return getCurrentWibTimeString() >= normalized;
 }
 
+async function notifyAdmins(title, body, type, data, pushData) {
+  try {
+    const [admins] = await pool.query("SELECT id, fcm_token FROM users WHERE role = 'admin'");
+
+    for (const admin of admins) {
+      await saveNotification(admin.id, title, body, type, data);
+      if (admin.fcm_token) {
+        sendPushNotification(admin.fcm_token, title, body, pushData).catch(() => {});
+      }
+    }
+  } catch (error) {
+    console.error('[Challenge] Failed to notify admins:', error.message);
+  }
+}
+
 exports.getChallenges = async (req, res) => {
   try {
     const challenges = await Challenge.find();
@@ -86,6 +101,33 @@ exports.createChallenge = async (req, res) => {
   try {
     const status = req.user.role === 'admin' ? 'active' : 'pending';
     const challenge = await Challenge.create({ ...req.body, created_by: req.user.id, status });
+
+    if (status === 'pending') {
+      const creator = await User.findById(req.user.id);
+      const actorName = creator?.name || 'A trainer';
+      const title = 'Challenge Submitted for Approval';
+      const body = `${actorName} submitted "${challenge.title}" for approval.`;
+      await notifyAdmins(
+        title,
+        body,
+        'admin_challenge_submission',
+        {
+          screen: 'ManageChallenge',
+          params: { initialTab: 'pending' },
+          intent: 'admin_challenge_submission',
+          actor_name: actorName,
+          actor_role: 'trainer',
+          challenge_id: Number(challenge.id),
+          event_key: `admin:challenge_submission:${challenge.id}`,
+        },
+        {
+          type: 'admin_challenge_submission',
+          challenge_id: String(challenge.id),
+          actor_name: actorName,
+        },
+      );
+    }
+
     res.status(201).json(challenge);
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -236,6 +278,38 @@ exports.submitCompletion = async (req, res) => {
       proof_url: proofPath,
       note: req.body.note || null,
     });
+
+    const [member, creator] = await Promise.all([
+      User.findById(req.user.id),
+      User.findById(challenge.created_by),
+    ]);
+
+    if (creator?.role === 'admin') {
+      const actorName = member?.name || 'A member';
+      const title = 'Challenge Review Needed';
+      const body = `${actorName} submitted proof for "${challenge.title}".`;
+      await notifyAdmins(
+        title,
+        body,
+        'admin_challenge_review',
+        {
+          screen: 'ManageChallenge',
+          params: { initialTab: 'reviews' },
+          intent: 'admin_challenge_review',
+          actor_name: actorName,
+          actor_role: 'member',
+          challenge_id: Number(challenge.id),
+          request_id: Number(request.id),
+          event_key: `admin:challenge_review:${request.id}`,
+        },
+        {
+          type: 'admin_challenge_review',
+          challenge_id: String(challenge.id),
+          request_id: String(request.id),
+          actor_name: actorName,
+        },
+      );
+    }
 
     res.status(201).json(request);
   } catch (error) {

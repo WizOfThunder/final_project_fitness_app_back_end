@@ -23,6 +23,8 @@ const Exercise = require('../exercises/exercise.model');
 const { askGemini } = require('../../config/gemini');
 const { pool } = require('../../config/db');
 const {enqueueJob, getJob, serializeJob} = require('./aiQueue');
+const { saveNotification } = require('../notification/notification.helper');
+const { sendPushNotification } = require('../notification/notification.service');
 
 const WIB_CURRENT_DATE_SQL = `(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Jakarta')::date`;
 
@@ -44,6 +46,45 @@ const DIET_REGEN_REASONS = {
   prep_time_issue: "Prep time doesn't fit",
   other: 'Other',
 };
+
+async function notifyAdminsAboutPlanValidation(user, plan, planType) {
+  try {
+    const [admins] = await pool.query("SELECT id, fcm_token FROM users WHERE role = 'admin'");
+    const planLabel = planType === 'diet' ? 'Diet' : 'Workout';
+    const title = `AI ${planLabel} Plan Submitted`;
+    const body = `${user.name} submitted an AI-generated ${planLabel.toLowerCase()} plan for validation.`;
+    const notificationData = {
+      screen: 'AIRecommendationValidation',
+      params: {},
+      intent: 'admin_validation_request',
+      actor_name: user.name,
+      actor_role: user.role || 'member',
+      plan_id: Number(plan.id),
+      plan_type: planType,
+      event_key: `admin:validation:${planType}:${plan.id}`,
+    };
+
+    for (const admin of admins) {
+      await saveNotification(
+        admin.id,
+        title,
+        body,
+        'admin_validation_request',
+        notificationData,
+      );
+      if (admin.fcm_token) {
+        sendPushNotification(admin.fcm_token, title, body, {
+          type: 'admin_validation_request',
+          plan_id: String(plan.id),
+          plan_type: planType,
+          actor_name: user.name,
+        }).catch(() => {});
+      }
+    }
+  } catch (error) {
+    console.error('[AI] Failed to notify admins about pending validation:', error.message);
+  }
+}
 
 // Map survey fitness level to DB difficulty values
 const DIFFICULTY_MAP = {
@@ -1461,6 +1502,8 @@ async function runWorkoutGeneration(userId, surveyData) {
     items: validItems,
   });
 
+  await notifyAdminsAboutPlanValidation(user, plan, 'workout');
+
   return {plan};
 }
 
@@ -1831,6 +1874,8 @@ async function runDietGeneration(userId, surveyData) {
     ),
     items: validItems,
   });
+
+  await notifyAdminsAboutPlanValidation(user, plan, 'diet');
 
   return {plan};
 }

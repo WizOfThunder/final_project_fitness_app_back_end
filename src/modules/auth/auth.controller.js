@@ -82,10 +82,23 @@ exports.register = async (req, res) => {
     if (data.role === 'trainer') {
       const adminTitle = 'New Trainer Registration';
       const adminBody = `${data.name} registered as a trainer and is awaiting certification review.`;
+      const notificationData = {
+        screen: 'UserManagement',
+        params: {},
+        intent: 'new_trainer',
+        actor_name: data.name,
+        actor_role: 'trainer',
+        trainer_id: Number(user.id),
+        event_key: `admin:new_trainer:${user.id}`,
+      };
       pool.query("SELECT id, fcm_token FROM users WHERE role = 'admin'").then(([admins]) => {
         for (const admin of admins) {
-          saveNotification(admin.id, adminTitle, adminBody, 'general').catch(() => {});
-          if (admin.fcm_token) sendPushNotification(admin.fcm_token, adminTitle, adminBody, {type: 'new_trainer'}).catch(() => {});
+          saveNotification(admin.id, adminTitle, adminBody, 'general', notificationData).catch(() => {});
+          if (admin.fcm_token) sendPushNotification(admin.fcm_token, adminTitle, adminBody, {
+            type: 'new_trainer',
+            trainer_id: String(user.id),
+            actor_name: data.name,
+          }).catch(() => {});
         }
       }).catch(() => {});
     }
