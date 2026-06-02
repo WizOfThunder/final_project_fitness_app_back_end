@@ -205,8 +205,9 @@ exports.getStats = async (req, res) => {
       ORDER BY created_at DESC
       LIMIT 10
     `);
-
+      console.log("success");
     } catch (error) {
+      console.log("fail");
       console.error(err);
     }
 
