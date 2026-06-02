@@ -200,7 +200,7 @@ exports.getStats = async (req, res) => {
         FROM admin_notifications
         ORDER BY event_key, created_at DESC, id DESC
       ) deduped
-      ORDER BY created_at DESC, id DESC
+      ORDER BY created_at DESC
       LIMIT 10
     `);
 
