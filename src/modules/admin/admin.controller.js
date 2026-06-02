@@ -151,6 +151,8 @@ exports.getStats = async (req, res) => {
     `);
 
     // ── Recent activity: last 10 admin-relevant notifications ──
+    try {
+      
     const [recentActivity] = await pool.query(`
       WITH admin_notifications AS (
         SELECT
@@ -203,6 +205,10 @@ exports.getStats = async (req, res) => {
       ORDER BY created_at DESC
       LIMIT 10
     `);
+
+    } catch (error) {
+      console.error(err);
+    }
 
     res.json({
       stats: {
