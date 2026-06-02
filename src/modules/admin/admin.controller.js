@@ -208,7 +208,7 @@ exports.getStats = async (req, res) => {
       console.log("success");
     } catch (error) {
       console.log("fail");
-      console.error(err);
+      console.log(error);
     }
 
     res.json({
