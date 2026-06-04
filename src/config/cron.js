@@ -160,9 +160,9 @@ function startCronJobs() {
     }
   }, { timezone: WIB_TIMEZONE });
 
-  // ── 10PM WIB daily — sync reminder + workout plan check ──
-  cron.schedule('0 22 * * *', async () => {
-    console.log('[CRON] Sending evening reminders...');
+  // ── 6PM WIB daily — workout reminder for pending plans ──
+  cron.schedule('0 18 * * *', async () => {
+    console.log('[CRON] Sending workout reminders...');
     try {
       const todayName = getTodayNameWIB();
       const weekStart = getWeekStartWIB();
@@ -194,7 +194,25 @@ function startCronJobs() {
               await saveNotification(user.id, workoutTitle, workoutBody, 'general');
             }
           }
+        } catch (err) {
+          console.error(`[CRON] Workout reminder failed for user ${user.id}:`, err.message);
+        }
+      }
+    } catch (err) {
+      console.error('[CRON] Workout reminder cron error:', err.message);
+    }
+  }, { timezone: WIB_TIMEZONE });
 
+  // ── 10PM WIB daily — sync reminder only ──
+  cron.schedule('0 22 * * *', async () => {
+    console.log('[CRON] Sending sync reminders...');
+    try {
+      const [users] = await pool.query(
+        "SELECT id, fcm_token, notification_prefs FROM users WHERE fcm_token IS NOT NULL AND fcm_token <> '' AND role = 'member'"
+      );
+      for (const user of users) {
+        try {
+          const prefs = user.notification_prefs ? JSON.parse(user.notification_prefs) : {};
           if (prefs.sync_reminder !== false) {
             const syncTitle = '📊 Sync Your Health Data';
             const syncBody = 'Remember to sync your Health Connect data to keep your progress up to date!';
@@ -202,11 +220,11 @@ function startCronJobs() {
             await saveNotification(user.id, syncTitle, syncBody, 'general');
           }
         } catch (err) {
-          console.error(`[CRON] Evening reminder failed for user ${user.id}:`, err.message);
+          console.error(`[CRON] Sync reminder failed for user ${user.id}:`, err.message);
         }
       }
     } catch (err) {
-      console.error('[CRON] Evening reminder cron error:', err.message);
+      console.error('[CRON] Sync reminder cron error:', err.message);
     }
   }, { timezone: WIB_TIMEZONE });
 
