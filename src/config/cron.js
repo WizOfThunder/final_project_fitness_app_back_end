@@ -286,7 +286,8 @@ function startCronJobs() {
           // Notify trainer — request expired without their action
           const trainerTitle = 'Hire Request Expired';
           const trainerBody = paymentStatus === 'settlement'
-            ? `The hire request from ${hire.member_name} for "${hire.post_title}" has expired. Midtrans still shows the payment as settled, so refund must be handled manually.`
+            // ? `The hire request from ${hire.member_name} for "${hire.post_title}" has expired. Midtrans still shows the payment as settled, so refund must be handled manually.`
+            ? `The hire request from ${hire.member_name} for "${hire.post_title}" has expired. The payment has been refunded.`
             : `The hire request from ${hire.member_name} for "${hire.post_title}" has expired. The payment has been refunded.`;
           await saveNotification(hire.trainer_user_id, trainerTitle, trainerBody, 'trainer_hire');
           if (hire.trainer_fcm_token) {
@@ -297,7 +298,8 @@ function startCronJobs() {
           // Notify member — their request expired, post is available again
           const memberTitle = 'Hire Request Expired';
           const memberBody = paymentStatus === 'settlement'
-            ? `Your hire request for "${hire.post_title}" expired because the trainer did not respond in time. Midtrans still shows the payment as settled, so refund must be handled manually before you hire again.`
+            // ? `Your hire request for "${hire.post_title}" expired because the trainer did not respond in time. Midtrans still shows the payment as settled, so refund must be handled manually before you hire again.`
+            ? `Your hire request for "${hire.post_title}" expired because the trainer did not respond in time. You can hire them again.`
             : `Your hire request for "${hire.post_title}" expired because the trainer did not respond in time. You can hire them again.`;
           await saveNotification(hire.member_id, memberTitle, memberBody, 'trainer_hire');
           if (hire.member_fcm_token) {
