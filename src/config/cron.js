@@ -172,15 +172,21 @@ function startCronJobs() {
       for (const user of users) {
         try {
           const prefs = user.notification_prefs ? JSON.parse(user.notification_prefs) : {};
-          // Match the app's current-week completion rules for verified workout plans.
+          // Match the app's current-week completion rules for the latest AI plan only.
           const [[pendingRow]] = await pool.query(
             `SELECT COUNT(*)::int AS pending_count
-             FROM workout_plan_items wpi
-              JOIN workout_plans wp ON wp.id = wpi.workout_plan_id
-              WHERE wp.user_id = ?
+              FROM workout_plan_items wpi
+               JOIN workout_plans wp ON wp.id = wpi.workout_plan_id
+              WHERE wp.id = (
+                SELECT wp_latest.id
+                FROM workout_plans wp_latest
+                WHERE wp_latest.user_id = ?
+                  AND wp_latest.generated_by = 'ai'
+                ORDER BY wp_latest.created_at DESC, wp_latest.id DESC
+                LIMIT 1
+              )
+                AND wp.status IN ('draft', 'verified')
                 AND wpi.day = ?
-                AND wp.generated_by IN ('ai', 'trainer')
-                AND wp.status = 'verified'
                 AND (wpi.is_done IS DISTINCT FROM TRUE OR wpi.week_start IS NULL OR wpi.week_start <> ?)`,
             [user.id, todayName, weekStart]
           );
