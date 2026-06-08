@@ -5,11 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "start:web": "node server.js",
-    "start:worker": "node worker.js",
-    "dev": "nodemon server.js",
-    "dev:web": "nodemon server.js",
-    "dev:worker": "nodemon worker.js"
+    "dev": "nodemon server.js"
   },
   "dependencies": {
     "axios": "^1.6.0",
