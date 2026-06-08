@@ -1,5 +1,6 @@
 const Exercise = require('./exercise.model');
 const axios = require('axios');
+const { pool } = require('../../config/db');
 
 exports.getExercises = async (req, res) => {
   try {
@@ -154,8 +155,8 @@ exports.setYoutubeUrl = async (req, res) => {
     const { youtube_url } = req.body;
     if (!youtube_url) return res.status(400).json({ error: 'youtube_url is required' });
 
-    const exercise = await Exercise.findByIdAndUpdate(req.params.id, { youtube_url });
-    if (!exercise) return res.status(404).json({ error: 'Exercise not found' });
+    const [result] = await pool.query('UPDATE exercises SET ? WHERE id = ?', [{ youtube_url }, req.params.id]);
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'Exercise not found' });
 
     res.json({ message: 'YouTube URL updated', exercise_id: req.params.id, youtube_url });
   } catch (error) {
