@@ -93,7 +93,6 @@ exports.syncActivity = async (req, res) => {
       { upsert: true }
     );
 
-    // Update current_value for all active auto challenges this user has joined
     const [activeChallenges] = await pool.query(
       `SELECT uc.id, c.type, c.target_value, c.start_date, c.end_date
        FROM user_challenges uc
@@ -124,7 +123,6 @@ exports.syncActivity = async (req, res) => {
         [Math.round(total), uc.id]
       );
 
-      // Auto-complete if target reached
       if (total >= uc.target_value) {
         await pool.query(
           "UPDATE user_challenges SET status = 'completed' WHERE id = ? AND status = 'active'",
@@ -135,7 +133,6 @@ exports.syncActivity = async (req, res) => {
       }
     }
 
-    // Trigger milestone/streak achievements after sync
     const { triggerAchievements } = require('../achievement/achievement.helper');
     await triggerAchievements(userId);
 
@@ -160,7 +157,6 @@ exports.getStreak = async (req, res) => {
     const tzOffset = parseInt(req.query.tz_offset) || 0;
     const now = new Date(Date.now() + tzOffset * 60 * 1000);
 
-    // Active days this week (Mon–today)
     const monday = getIsoWeekStart(now);
     const [[weekRow]] = await pool.query(
       `SELECT COUNT(DISTINCT date) as active_days
@@ -169,7 +165,6 @@ exports.getStreak = async (req, res) => {
        [userId, formatDateUTC(monday), formatDateUTC(now)]
     );
 
-    // Consecutive weeks streak
     const [weekRows] = await pool.query(
       `SELECT ${ISO_YEARWEEK_SQL} AS yw FROM activity_logs
        WHERE user_id = ? AND workout_completed = TRUE
@@ -203,7 +198,6 @@ exports.markWorkoutDay = async (req, res) => {
     const todayDate = parseDateOnly(today);
     const weekStart = formatDateUTC(getIsoWeekStart(todayDate));
 
-    // Check 1: all AI plan items for today are done
     const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
     const todayName = DAY_NAMES[todayDate.getUTCDay()];
 
@@ -219,7 +213,6 @@ exports.markWorkoutDay = async (req, res) => {
        [weekStart, userId, todayName]
     );
 
-    // Check 2: confirmed trainer session today
     const [[sessionRow]] = await pool.query(
       `SELECT hs.id FROM hire_sessions hs
        JOIN trainer_hires th ON th.id = hs.hire_id
@@ -230,8 +223,6 @@ exports.markWorkoutDay = async (req, res) => {
     const hasTrainerSession = !!sessionRow;
     const hasCompletedPlan = planRows.some(row => Number(row.total_items) > 0 && Number(row.done_items) === Number(row.total_items));
 
-    // Only mark complete if: a verified AI/trainer plan for today is fully done OR a trainer session is confirmed
-    // On a non-plan day with no trainer session, do nothing
     if (!hasCompletedPlan && !hasTrainerSession) {
       return res.json({ marked: false, reason: 'not_complete' });
     }
@@ -250,11 +241,10 @@ exports.markWorkoutDay = async (req, res) => {
 exports.getWeeklySummary = async (req, res) => {
   try {
     const userId = req.user.id;
-    const tzOffset = parseInt(req.query.tz_offset) || 0; // minutes offset from UTC, e.g. 420 for UTC+7
+    const tzOffset = parseInt(req.query.tz_offset) || 0;
 
-    // Shift now to local time by applying the offset
     const now = new Date(Date.now() + tzOffset * 60 * 1000);
-    const day = now.getUTCDay(); // 0=Sun in local time
+    const day = now.getUTCDay();
     const diff = day === 0 ? -6 : 1 - day;
     const monday = new Date(now);
     monday.setUTCDate(now.getUTCDate() + diff);

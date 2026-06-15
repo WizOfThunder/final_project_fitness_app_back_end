@@ -22,7 +22,6 @@ function getNowWIB() {
   return new Date(Date.now() + 7 * 60 * 60 * 1000);
 }
 
-// Get current day name in WIB (UTC+7)
 function getTodayNameWIB() {
   const now = getNowWIB();
   return DAY_NAMES[now.getUTCDay()];
@@ -128,12 +127,6 @@ function getWeatherAdvice(weather) {
 }
 
 function startCronJobs() {
-  // Ensure last_lat/last_lon columns exist for weather cron
-  pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_lat DECIMAL(10,7) NULL').catch(() => {});
-  pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_lon DECIMAL(10,7) NULL').catch(() => {});
-  pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_prefs TEXT NULL').catch(() => {});
-  pool.query('ALTER TABLE achievements ADD COLUMN IF NOT EXISTS icon VARCHAR(100) NULL').catch(() => {});
-
   // ── 8AM WIB daily — weather notification to members/trainers with FCM token + location ──
   cron.schedule('0 8 * * *', async () => {
     console.log('[CRON] Sending morning weather notifications...');
@@ -172,7 +165,6 @@ function startCronJobs() {
       for (const user of users) {
         try {
           const prefs = user.notification_prefs ? JSON.parse(user.notification_prefs) : {};
-          // Match the app's current-week completion rules for the latest AI plan only.
           const [[pendingRow]] = await pool.query(
             `SELECT COUNT(*)::int AS pending_count
               FROM workout_plan_items wpi
@@ -234,11 +226,8 @@ function startCronJobs() {
     }
   }, { timezone: WIB_TIMEZONE });
 
-  // Runs every hour — checks expired trainer hire approvals
   cron.schedule('0 * * * *', async () => {
-    // Mark overdue sessions as missed and notify both parties
     try {
-      // Get sessions about to be marked missed before updating
       const [missedSessions] = await pool.query(
         `SELECT hs.id, hs.hire_id, hs.scheduled_date, hs.scheduled_day, hs.scheduled_start,
                 th.member_id, th.post_id,
@@ -289,7 +278,6 @@ function startCronJobs() {
           await TrainerPost.reactivateIfSystemClosed(hire.post_id);
           console.log(`[CRON] Expired hire ${hire.id}`);
 
-          // Notify trainer — request expired without their action
           const trainerTitle = 'Hire Request Expired';
           const trainerBody = paymentStatus === 'settlement'
             // ? `The hire request from ${hire.member_name} for "${hire.post_title}" has expired. Midtrans still shows the payment as settled, so refund must be handled manually.`
@@ -301,7 +289,6 @@ function startCronJobs() {
               .catch(err => console.error(`[CRON] FCM trainer notif failed for hire ${hire.id}:`, err.message));
           }
 
-          // Notify member — their request expired, post is available again
           const memberTitle = 'Hire Request Expired';
           const memberBody = paymentStatus === 'settlement'
             // ? `Your hire request for "${hire.post_title}" expired because the trainer did not respond in time. Midtrans still shows the payment as settled, so refund must be handled manually before you hire again.`
@@ -426,15 +413,12 @@ function startCronJobs() {
     }
   });
 
-  // Runs daily at midnight — cohort program start: activate enrolled hires + close full posts past deadline
   cron.schedule('0 0 * * *', async () => {
     console.log('[CRON] Checking cohort program starts and enrollment deadlines...');
     try {
-      // 1. Activate enrolled hires whose program_start_date has arrived
       const activatedHires = await TrainerHire.activateReadyEnrolledHires();
       for (const hire of activatedHires) {
         try {
-          // Notify member
           const mTitle = 'Your Program Has Started!';
           const mBody = `"${hire.post_title}" has officially started. Good luck!`;
           await saveNotification(hire.member_id, mTitle, mBody, 'trainer_hire');
@@ -446,7 +430,6 @@ function startCronJobs() {
           console.error(`[CRON] Failed to activate enrolled hire ${hire.id}:`, err.message);
         }
       }
-      // Notify trainer once per post about program start
       const postGroups = activatedHires.reduce((acc, h) => {
         if (!acc[h.post_id]) acc[h.post_id] = h;
         return acc;
@@ -465,7 +448,6 @@ function startCronJobs() {
         }
       }
 
-      // 2. Auto-close posts whose enrollment_deadline has passed
       const [expiredPosts] = await pool.query(
         `SELECT tp.id, tp.title, tp.trainer_id, u.fcm_token AS trainer_fcm_token,
                 (SELECT COUNT(*) FROM trainer_hires WHERE post_id = tp.id AND status IN ('enrolled','active')) AS enrolled_count
@@ -492,7 +474,6 @@ function startCronJobs() {
     }
   });
 
-  // Runs daily at midnight — checks auto challenges against activity_logs
   cron.schedule('0 0 * * *', async () => {
     console.log('[CRON] Checking auto challenge progress...');
     try {
@@ -500,7 +481,7 @@ function startCronJobs() {
 
       for (const uc of activeChallenges) {
         try {
-          const metric = uc.type; // 'steps', 'calories', or 'distance'
+          const metric = uc.type;
           const col = metric === 'distance' ? 'distance' : metric === 'calories' ? 'calories' : 'steps';
 
           const [[{ total }]] = await pool.query(
@@ -515,7 +496,6 @@ function startCronJobs() {
           if (total >= uc.target_value) {
             await UserChallenge.complete(uc.user_challenge_id);
             await triggerAchievements(uc.user_id);
-            // Notify member of challenge completion
             const [[challengeRow]] = await pool.query(
               'SELECT c.title, u.fcm_token FROM challenges c, users u WHERE c.id = ? AND u.id = ?',
               [uc.challenge_id, uc.user_id]

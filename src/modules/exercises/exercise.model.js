@@ -11,7 +11,6 @@ const Exercise = {
     if (muscle)     { conditions.push('muscle = ?');        values.push(muscle); }
     if (equipment) {
       if (equipment === 'other') {
-        // exercises where equipment doesn't match any known value
         KNOWN_EQUIPMENTS.forEach(() => conditions.push('equipment NOT LIKE ?'));
         KNOWN_EQUIPMENTS.forEach(e => values.push(`%${e}%`));
         conditions.push('equipment != ?');

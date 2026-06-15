@@ -144,7 +144,6 @@ exports.reviewChallenge = async (req, res) => {
 
     await pool.query('UPDATE challenges SET status = ?, validation_note = ? WHERE id = ?', [action, note || null, req.params.id]);
 
-    // Save in-app notification and send FCM push
     const trainer = await User.findById(challenge.created_by);
     if (trainer) {
       const approved = action === 'active';
@@ -188,7 +187,6 @@ exports.joinChallenge = async (req, res) => {
       return res.status(400).json({ error: 'Challenge has already ended' });
     }
 
-    // For online/offline: cannot join once the event has started
     if (challenge.challenge_type !== 'auto' && challenge.start_date) {
       const eventStarted = challenge.start_date < today || (
         challenge.start_date === today && (
@@ -200,7 +198,6 @@ exports.joinChallenge = async (req, res) => {
       }
     }
 
-    // Check participant limit
     if (challenge.max_participants) {
       const [[{cnt}]] = await pool.query(
         'SELECT COUNT(*) as cnt FROM user_challenges WHERE challenge_id = ?',
@@ -229,7 +226,6 @@ exports.getMyChallenges = async (req, res) => {
   }
 };
 
-// Member submits a completion request for a manual challenge, or claims auto challenge
 exports.submitCompletion = async (req, res) => {
   try {
     const userChallengeId = req.params.userChallengeId;
@@ -242,7 +238,6 @@ exports.submitCompletion = async (req, res) => {
     const challenge = await Challenge.findById(uc.challenge_id);
     if (!challenge) return res.status(404).json({ error: 'Challenge not found' });
 
-    // Auto challenges: verify progress then complete immediately
     if (challenge.challenge_type === 'auto') {
       if (uc.current_value < challenge.target_value) {
         return res.status(400).json({ error: 'Target not yet reached' });
@@ -252,7 +247,6 @@ exports.submitCompletion = async (req, res) => {
       return res.json({ message: 'Challenge completed! Reward granted.' });
     }
 
-    // Manual challenges: enforce submission only after event end date+time
     if (challenge.challenge_type !== 'auto') {
       const today = getCurrentWibDateString();
       if (challenge.end_date) {
@@ -265,7 +259,6 @@ exports.submitCompletion = async (req, res) => {
       }
     }
 
-    // Manual challenges: create a pending completion request
     const alreadyPending = await CompletionRequest.existsPending(userChallengeId);
     if (alreadyPending) return res.status(400).json({ error: 'Completion request already pending' });
 
@@ -317,7 +310,6 @@ exports.submitCompletion = async (req, res) => {
   }
 };
 
-// Bulk approve all pending requests for a challenge
 exports.bulkApproveRequests = async (req, res) => {
   try {
     const { challenge_id } = req.body;
@@ -334,7 +326,6 @@ exports.bulkApproveRequests = async (req, res) => {
       await CompletionRequest.review(req_.id, 'approved', req.user.id);
       await UserChallenge.complete(req_.user_challenge_id);
       await triggerAchievements(req_.user_id);
-      // Notify each member
       const [[memberRow]] = await pool.query(
         `SELECT u.fcm_token, c.title AS challenge_title
          FROM users u, challenges c
@@ -355,7 +346,6 @@ exports.bulkApproveRequests = async (req, res) => {
   }
 };
 
-// Trainer/admin gets all pending completion requests
 exports.getPendingRequests = async (req, res) => {
   try {
     const requests = await CompletionRequest.findPending();
@@ -365,7 +355,6 @@ exports.getPendingRequests = async (req, res) => {
   }
 };
 
-// Trainer/admin approves or rejects a completion request
 exports.reviewRequest = async (req, res) => {
   try {
     const { status } = req.body; // 'approved' or 'rejected'
@@ -384,7 +373,6 @@ exports.reviewRequest = async (req, res) => {
       await triggerAchievements(request.user_id);
     }
 
-    // Notify member of review result
     const [[memberRow]] = await pool.query(
       `SELECT u.fcm_token, c.title AS challenge_title
        FROM users u, challenges c

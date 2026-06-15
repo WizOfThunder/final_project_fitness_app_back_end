@@ -46,7 +46,6 @@ function normalizeScheduledDate(value, scheduledDay) {
   const rawDiff = (targetDay - actualDay + 7) % 7;
   const diff = rawDiff > 3 ? rawDiff - 7 : rawDiff;
 
-  // Old sessions may be shifted by one day because they were saved via UTC date formatting.
   if (diff !== 0 && Math.abs(diff) <= 1) {
     date.setDate(date.getDate() + diff);
   }
@@ -59,7 +58,6 @@ function generateCode() {
 }
 
 const Session = {
-  // Generate sessions for a hire based on the post's schedule for the hire's month
   async generateForHire(hireId, postSchedule, startDate, endDate) {
     const start = parseDateOnly(startDate);
     const end = parseDateOnly(endDate);
@@ -113,9 +111,7 @@ const Session = {
     };
   },
 
-  // Trainer starts a session — generates a 6-digit code valid for 30 minutes
   async trainerStart(sessionId, trainerId) {
-    // Verify trainer owns this session via hire → post
     const [[row]] = await pool.query(
       `SELECT hs.*, tp.trainer_id, tp.schedule
        FROM hire_sessions hs
@@ -137,7 +133,6 @@ const Session = {
     return code;
   },
 
-  // Member confirms attendance with the code
   async memberConfirm(sessionId, memberId, code) {
     const [[row]] = await pool.query(
       `SELECT hs.*, th.member_id
@@ -159,7 +154,6 @@ const Session = {
     return { ok: true };
   },
 
-  // Mark overdue started sessions as missed (called by cron)
   async markMissed() {
     await pool.query(
       `UPDATE hire_sessions hs
@@ -170,7 +164,6 @@ const Session = {
           AND hs.scheduled_date < ${WIB_CURRENT_DATE_SQL}
           AND hs.scheduled_date <= th.end_date`
     );
-    // Also expire started sessions where code expired and member never confirmed
     await pool.query(
       `UPDATE hire_sessions hs
        SET status = 'missed'

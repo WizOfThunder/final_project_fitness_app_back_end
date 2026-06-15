@@ -5,7 +5,6 @@ const ISO_YEARWEEK_SQL = `CAST(TO_CHAR(date, 'IYYYIW') AS INTEGER)`;
 
 exports.getAchievements = async (req, res) => {
   try {
-    // admin gets all including inactive, others get active only
     const achievements = req.user?.role === 'admin'
       ? await Achievement.findAll()
       : await Achievement.find();
@@ -63,7 +62,6 @@ exports.getMyAchievements = async (req, res) => {
   }
 };
 
-// Returns all active achievements with user's current progress and earned status
 exports.getMyProgress = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -108,7 +106,6 @@ exports.getMyProgress = async (req, res) => {
       const startOfYear = new Date(Date.UTC(year, 0, 1));
       const currentWeek = year * 100 + Math.ceil(((d - startOfYear) / 86400000 + 1) / 7);
       const weekSet = new Set(weekRows.map(r => r.yw));
-      // Grace: if current week has no data yet, start from last week
       let expected = weekSet.has(currentWeek) ? currentWeek : prevYW(currentWeek);
       for (const row of weekRows) {
         if (row.yw === expected) {

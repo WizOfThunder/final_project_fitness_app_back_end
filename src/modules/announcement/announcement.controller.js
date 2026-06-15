@@ -2,7 +2,6 @@ const Announcement = require('./announcement.model');
 const { sendMulticastNotification } = require('../notification/notification.service');
 const { saveNotification } = require('../notification/notification.helper');
 
-// GET /announcements/:post_id — trainer or active/enrolled member
 exports.getAnnouncements = async (req, res) => {
   try {
     const postId = req.params.post_id;
@@ -24,7 +23,6 @@ exports.getAnnouncements = async (req, res) => {
   }
 };
 
-// POST /announcements/:post_id — trainer only
 exports.createAnnouncement = async (req, res) => {
   try {
     const postId = req.params.post_id;
@@ -40,13 +38,11 @@ exports.createAnnouncement = async (req, res) => {
       message: message.trim(),
     });
 
-    // Get the io instance attached to app and emit to post room
     const io = req.app.get('io');
     if (io) {
       io.to(`post-${postId}`).emit('new_announcement', announcement);
     }
 
-    // FCM multicast + in-app notification to all active/enrolled members
     const members = await Announcement.findMemberTokens(postId);
     const tokens = members.map(m => m.fcm_token).filter(Boolean);
     const title = 'New Announcement';

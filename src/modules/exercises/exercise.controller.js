@@ -26,7 +26,6 @@ exports.syncExercises = async (req, res) => {
     const allMuscles = ['abdominals', 'abductors', 'adductors', 'biceps', 'calves', 'chest', 'forearms', 'glutes', 'hamstrings', 'lats', 'lower_back', 'middle_back', 'neck', 'quadriceps', 'traps', 'triceps'];
     const allTypes = ['cardio', 'olympic_weightlifting', 'plyometrics', 'powerlifting', 'strength', 'stretching', 'strongman'];
 
-    // If any filter param is provided, do a single targeted request
     const isFiltered = name || type || muscle || difficulty || equipment;
     const targets = isFiltered
       ? [{ name, type, muscle, difficulty, equipment }]
@@ -37,7 +36,6 @@ exports.syncExercises = async (req, res) => {
 
     let allExercises = [];
     for (const params of targets) {
-      // strip undefined keys
       const cleanParams = Object.fromEntries(Object.entries(params).filter(([, v]) => v != null));
       const response = await axios.get('https://api.api-ninjas.com/v1/exercises', {
         headers: { 'X-Api-Key': process.env.API_NINJAS_KEY },
@@ -67,7 +65,6 @@ exports.syncExercises = async (req, res) => {
       }
     }
 
-    // fetch existing names from db
     const existing = await Exercise.find();
     const existingNames = new Set(existing.map(e => e.name.toLowerCase()));
 

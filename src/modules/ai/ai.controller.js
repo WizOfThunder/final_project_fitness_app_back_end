@@ -1303,7 +1303,6 @@ function buildPrompt(user, surveyData, exercises, previousPlan, activitySummary)
     additionalNote,
   } = surveyData;
 
-  // Clean 'None'/'Unsure' values before building prompt strings
   const cleanEquipment = (equipment || []).filter(e => e !== 'None');
   const equipmentStr = cleanEquipment.length
     ? cleanEquipment.join(', ') + (equipmentOther ? `, ${equipmentOther}` : '')
@@ -1407,7 +1406,6 @@ function parseWorkoutResponse(raw, planDays) {
     const dayMatch = DAYS.find(d => trimmed.startsWith(d));
     if (dayMatch) { currentDay = dayMatch; continue; }
     if (!currentDay) continue;
-    // match: - exercise_id: 12, sets: 3, reps: 10
     const match = line.match(/exercise_id:\s*(\d+),\s*sets:\s*(\d+),\s*reps:\s*(\d+),\s*duration_seconds:\s*(\d+)/);
     if (match) {
       const reps = parseInt(match[3]);

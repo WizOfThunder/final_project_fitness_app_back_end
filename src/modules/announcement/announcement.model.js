@@ -23,7 +23,6 @@ const Announcement = {
     );
     return rows;
   },
-  // Returns FCM tokens of all active/enrolled members for a post (for multicast push)
   async findMemberTokens(postId) {
     const [rows] = await pool.query(
       `SELECT u.fcm_token, u.id AS user_id
@@ -34,7 +33,6 @@ const Announcement = {
     );
     return rows;
   },
-  // Verify the requesting user is the trainer who owns this post
   async verifyTrainer(postId, trainerId) {
     const [[row]] = await pool.query(
       `SELECT id FROM trainer_posts WHERE id = ? AND trainer_id = ? AND visibility = 'public'`,
@@ -42,7 +40,6 @@ const Announcement = {
     );
     return !!row;
   },
-  // Verify the requesting user is an active/enrolled member of this post
   async verifyMember(postId, memberId) {
     const [[row]] = await pool.query(
       `SELECT th.id FROM trainer_hires th

@@ -31,7 +31,6 @@ exports.validatePlan = async (req, res) => {
 
     await ValidationLog.create({ plan_id, plan_type: planType, admin_id: req.user.id, action, note: note || null });
 
-    // Notify the plan owner
     const [[planRow]] = await pool.query(
       `SELECT user_id FROM ${table} WHERE id = ?`, [plan_id]
     );

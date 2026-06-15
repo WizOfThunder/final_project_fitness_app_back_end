@@ -147,7 +147,6 @@ async function notifyPublicHireActivated(hire) {
   try {
     if (hire.flow === 'enrolled') {
       const startStr = formatDateLabel(hire.program_start_date);
-      // Notify member — enrolled, waiting for program start
       const mTitle = 'Enrollment Confirmed!';
       const mBody = `You're enrolled in "${hire.post_title}". The program starts on ${startStr}. Get ready!`;
       await saveNotification(hire.member_id, mTitle, mBody, 'trainer_hire');
@@ -155,7 +154,6 @@ async function notifyPublicHireActivated(hire) {
         sendPushNotification(hire.member_fcm_token, mTitle, mBody, {type: 'trainer_enrolled', post_id: String(hire.post_id)})
           .catch(err => console.error('[Payment] FCM enrolled member failed:', err.message));
       }
-      // Notify trainer — new enrollment
       const tTitle = 'New Enrollment';
       const tBody = `${hire.member_name} enrolled in "${hire.post_title}". Program starts ${startStr}.`;
       await saveNotification(hire.trainer_id, tTitle, tBody, 'trainer_hire');
@@ -164,7 +162,6 @@ async function notifyPublicHireActivated(hire) {
           .catch(err => console.error('[Payment] FCM enrolled trainer failed:', err.message));
       }
     } else {
-      // Rolling: active immediately
       const mTitle = 'Subscription Active!';
       const mBody = `Your subscription to "${hire.post_title}" is now active. Good luck!`;
       await saveNotification(hire.member_id, mTitle, mBody, 'trainer_hire');

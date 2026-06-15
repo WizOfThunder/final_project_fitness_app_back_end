@@ -5,7 +5,6 @@ const { sendPushNotification } = require('../notification/notification.service')
 const ActivityLog = require('../users/activity.model');
 const WorkoutPlan = require('../workout/workout.model');
 
-// GET /sessions/hire/:hire_id — get all sessions for a hire (trainer or member)
 exports.getHireSessions = async (req, res) => {
   try {
     const hireId = req.params.hire_id;
@@ -42,7 +41,6 @@ exports.getHireSessions = async (req, res) => {
   }
 };
 
-// PUT /sessions/:session_id/note — trainer sets agenda/note for a session
 exports.setSessionNote = async (req, res) => {
   try {
     const { note } = req.body;
@@ -54,13 +52,11 @@ exports.setSessionNote = async (req, res) => {
   }
 };
 
-// POST /sessions/:session_id/start — trainer starts session, returns code
 exports.startSession = async (req, res) => {
   try {
     const code = await Session.trainerStart(Number(req.params.session_id), req.user.id);
     if (!code) return res.status(400).json({ error: 'Cannot start session — not yours, already started, or not upcoming' });
 
-    // Notify member
     const [[session]] = await pool.query(
       `SELECT hs.*, th.id AS hire_id, th.status AS hire_status, th.member_id,
               member.fcm_token AS member_fcm, member.name AS member_name,
@@ -106,7 +102,6 @@ exports.startSession = async (req, res) => {
   }
 };
 
-// POST /sessions/:session_id/confirm — member confirms with code
 exports.confirmSession = async (req, res) => {
   try {
     const { code } = req.body;
@@ -115,7 +110,6 @@ exports.confirmSession = async (req, res) => {
     const result = await Session.memberConfirm(Number(req.params.session_id), req.user.id, code);
     if (!result.ok) return res.status(400).json({ error: result.error });
 
-    // Notify trainer
     const [[session]] = await pool.query(
       `SELECT hs.*, tp.trainer_id, u.fcm_token AS trainer_fcm, u.name AS member_name,
               tp.title AS post_title
@@ -150,7 +144,6 @@ exports.confirmSession = async (req, res) => {
   }
 };
 
-// POST /sessions/hire/:hire_id/dispute — member raises a dispute
 exports.createDispute = async (req, res) => {
   try {
     const hireId = Number(req.params.hire_id);
@@ -166,12 +159,10 @@ exports.createDispute = async (req, res) => {
     );
     if (!hire) return res.status(404).json({ error: 'Active hire not found' });
 
-    // Only one open dispute per hire
     const existing = await Dispute.findOpenByHire(hireId);
     if (existing)
       return res.status(400).json({ error: 'You already have an open dispute for this hire' });
 
-    // Must have reached the first scheduled session date already
     const hasReachedFirstSession = await Session.hasReachedFirstSession(hireId);
     if (!hasReachedFirstSession)
       return res.status(400).json({ error: 'No sessions scheduled yet — disputes can only be raised after the first session date' });
@@ -183,7 +174,6 @@ exports.createDispute = async (req, res) => {
       description: description || null,
     });
 
-    // Notify admins
     const [admins] = await pool.query("SELECT id, fcm_token FROM users WHERE role = 'admin'");
     const disputeTitle = 'New Hire Dispute';
     const disputeBody = `${hire.member_name || 'A member'} raised a dispute: ${reason}`;
@@ -213,7 +203,6 @@ exports.createDispute = async (req, res) => {
   }
 };
 
-// GET /sessions/hire/:hire_id/dispute — get dispute for a hire
 exports.getDispute = async (req, res) => {
   try {
     const hireId = Number(req.params.hire_id);
@@ -238,7 +227,6 @@ exports.getDispute = async (req, res) => {
   }
 };
 
-// GET /sessions/disputes — admin: get all open disputes
 exports.getAllDisputes = async (req, res) => {
   try {
     const disputes = await Dispute.findAllOpen();
@@ -248,7 +236,6 @@ exports.getAllDisputes = async (req, res) => {
   }
 };
 
-// PUT /sessions/disputes/:dispute_id/resolve — admin resolves dispute
 exports.resolveDispute = async (req, res) => {
   try {
     const { status, note } = req.body;
@@ -276,7 +263,6 @@ exports.resolveDispute = async (req, res) => {
       }
     }
 
-    // Notify member and trainer
     const [[dispute]] = await pool.query(
       `SELECT hd.*, th.member_id, th.status AS hire_status,
                u.fcm_token AS member_fcm,

@@ -39,7 +39,6 @@ function parseDateOnly(value) {
   return new Date(year, month - 1, day);
 }
 
-// Get monday of current week as YYYY-MM-DD
 function getWeekStart(dateValue = null) {
   const now = parseDateOnly(dateValue) || parseDateOnly(formatWibDate(new Date()));
   const day = now.getDay();
@@ -52,7 +51,6 @@ function getWeekStart(dateValue = null) {
   )}-${String(monday.getDate()).padStart(2, '0')}`;
 }
 
-// GET /workout/trainer/clients — active clients of this trainer with basic activity stats
 exports.getTrainerClients = async (req, res) => {
   try {
     const [rows] = await pool.query(
@@ -81,10 +79,8 @@ exports.getTrainerClients = async (req, res) => {
   }
 };
 
-// GET /workout/trainer/member/:userId — view a specific member's trainer-assigned plan
 exports.getMemberPlan = async (req, res) => {
   try {
-    // Verify trainer has an active hire with this member
     const [[hire]] = await pool.query(
       `SELECT th.id FROM trainer_hires th
        JOIN trainer_posts tp ON tp.id = th.post_id
@@ -101,13 +97,11 @@ exports.getMemberPlan = async (req, res) => {
   }
 };
 
-// POST /workout/trainer/assign — create a workout plan for a member
 exports.assignPlan = async (req, res) => {
   try {
     const { member_id, items, session_id } = req.body;
     if (!member_id || !items?.length) return res.status(400).json({ error: 'member_id and items are required' });
 
-    // Verify trainer has an active hire with this member
     const [[hire]] = await pool.query(
       `SELECT th.id FROM trainer_hires th
        JOIN trainer_posts tp ON tp.id = th.post_id
@@ -168,7 +162,7 @@ exports.assignPlan = async (req, res) => {
       user_id: member_id,
       session_id: session_id || null,
       generated_by: 'trainer',
-      status: 'verified', // trainer-assigned plans are pre-approved
+      status: 'verified',
       items: normalizedItems,
     });
     res.status(201).json(plan);

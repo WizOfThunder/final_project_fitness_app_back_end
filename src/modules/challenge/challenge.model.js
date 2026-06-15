@@ -141,7 +141,6 @@ const UserChallenge = {
       "UPDATE user_challenges SET status = 'completed' WHERE id = ?", [id]
     );
   },
-  // For cron: get all active auto challenges that haven't ended yet
   async findActiveAuto() {
     const [rows] = await pool.query(
       `SELECT uc.id as user_challenge_id, uc.user_id, uc.current_value,

@@ -104,7 +104,6 @@ exports.syncRecipes = async (req, res) => {
     if (minProtein) params.minProtein = minProtein;
     if (maxReadyTime) params.maxReadyTime = maxReadyTime;
     params.cuisine = normalizedCuisine;
-    // default to excluding drinks unless explicitly overridden
     params.type = type || 'main course,side dish,salad,breakfast,appetizer,soup,snack,dessert';
 
     const response = await axios.get('https://api.spoonacular.com/recipes/complexSearch', { params });
@@ -132,7 +131,6 @@ exports.syncRecipes = async (req, res) => {
 
       const raw = detailRes.data;
 
-      // fetch step-by-step instructions
       let instructions = null;
       try {
         const instrRes = await axios.get(`https://api.spoonacular.com/recipes/${raw.id}/analyzedInstructions`, {
@@ -210,7 +208,6 @@ exports.createRecipe = async (req, res) => {
     if (!normalizedCuisine) {
       return res.status(400).json({error: 'A valid cuisine is required'});
     }
-    // Use a negative auto-decrement ID for manual recipes to avoid Spoonacular ID conflicts
     const { pool } = require('../../config/db');
     const [[minRow]] = await pool.query('SELECT MIN(id) as min_id FROM recipes');
     const newId = Math.min((minRow.min_id || 0) - 1, -1);

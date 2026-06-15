@@ -4,7 +4,6 @@ const ISO_YEARWEEK_SQL = `CAST(TO_CHAR(date, 'IYYYIW') AS INTEGER)`;
 
 async function triggerAchievements(userId) {
   try {
-    // Get all achievements not yet earned by this user
     const [unearned] = await pool.query(
       `SELECT * FROM achievements
        WHERE is_active = TRUE
@@ -13,7 +12,6 @@ async function triggerAchievements(userId) {
     );
     if (!unearned.length) return;
 
-    // --- challenge_complete ---
     const [[{ completed_count }]] = await pool.query(
       `SELECT COUNT(*) as completed_count FROM user_challenges WHERE user_id = ? AND status = 'completed'`,
       [userId]
@@ -27,7 +25,6 @@ async function triggerAchievements(userId) {
     );
 
     // --- weekly_streak: count consecutive completed weeks (Mon-Sun) with at least 1 active day ---
-    // Grace: if current week has no data yet, start from last week to avoid breaking streak on Monday morning
     const [weekRows] = await pool.query(
       `SELECT ${ISO_YEARWEEK_SQL} AS yw FROM activity_logs
        WHERE user_id = ? AND workout_completed = TRUE
@@ -38,15 +35,13 @@ async function triggerAchievements(userId) {
     if (weekRows.length > 0) {
       const currentYW = getYearWeek(new Date());
       const weekSet = new Set(weekRows.map(r => r.yw));
-      // Start from current week if it has data, otherwise start from last week (grace period)
       let expected = weekSet.has(currentYW) ? currentYW : prevYearWeek(currentYW);
       for (const row of weekRows) {
         if (row.yw === expected) {
-          // Only count weeks that are fully in the past OR current week if it already has data
           weeklyStreak++;
           expected = prevYearWeek(expected);
         } else if (row.yw < expected) {
-          break; // gap found
+          break;
         }
       }
     }
@@ -76,7 +71,6 @@ async function triggerAchievements(userId) {
 
         console.log(`[Achievement] User ${userId} earned "${achievement.title}"`);
 
-        // Send in-app notification
         const { saveNotification } = require('../notification/notification.helper');
         await saveNotification(
           userId,
@@ -86,7 +80,6 @@ async function triggerAchievements(userId) {
           {screen: 'Achievement'}
         );
 
-        // Send push notification if user has FCM token
         const [[userRow]] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [userId]);
         if (userRow?.fcm_token) {
           const { sendPushNotification } = require('../notification/notification.service');
@@ -104,7 +97,6 @@ async function triggerAchievements(userId) {
   }
 }
 
-// Returns YEARWEEK value as a number (e.g. 202401)
 function getYearWeek(date) {
   const d = new Date(date);
   const day = d.getUTCDay() || 7;
@@ -119,7 +111,6 @@ function prevYearWeek(yw) {
   const year = Math.floor(yw / 100);
   const week = yw % 100;
   if (week > 1) return year * 100 + (week - 1);
-  // Go to last week of previous year
   const lastWeek = getYearWeek(new Date(Date.UTC(year - 1, 11, 28)));
   return lastWeek;
 }

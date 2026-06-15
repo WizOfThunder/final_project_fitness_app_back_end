@@ -65,7 +65,6 @@ exports.register = async (req, res) => {
       data.certification_url = normalizeOptionalText(certification_url);
       data.certification_status = 'pending';
     } else {
-      // non-trainers are auto-approved (status not relevant but set for consistency)
       data.certification_status = 'approved';
     }
 
@@ -78,7 +77,6 @@ exports.register = async (req, res) => {
     const { password: _, ...rest } = user;
     res.status(201).json({ message: 'User registered', token, user: rest });
 
-    // Notify admins only when a new trainer registers (fire and forget)
     if (data.role === 'trainer') {
       const adminTitle = 'New Trainer Registration';
       const adminBody = `${data.name} registered as a trainer and is awaiting certification review.`;

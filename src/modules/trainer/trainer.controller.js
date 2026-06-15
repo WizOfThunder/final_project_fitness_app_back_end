@@ -555,7 +555,6 @@ exports.updatePost = async (req, res) => {
       }
     }
 
-    // Only include defined fields so partial updates (e.g. toggle active) don't null out other columns
     const data = {};
     if (title !== undefined) data.title = title;
     if (description !== undefined) data.description = description;
@@ -628,14 +627,12 @@ exports.hireTrainer = async (req, res) => {
       }
     }
 
-    // Check if member already has an active/pending hire for this post
     const [existingHire] = await require('../../config/db').pool.query(
       "SELECT id FROM trainer_hires WHERE member_id = ? AND post_id = ? AND status IN ('pending_payment','pending_approval','enrolled','active')",
       [req.user.id, post.id]
     );
     if (existingHire.length > 0) return res.status(400).json({ error: 'You already have an active or pending hire for this post' });
 
-    // Enforce one pending or active hire per member globally
     const [activeGlobal] = await require('../../config/db').pool.query(
       "SELECT id, status FROM trainer_hires WHERE member_id = ? AND status IN ('pending_payment','pending_approval','enrolled','active') LIMIT 1",
       [req.user.id]
@@ -647,12 +644,10 @@ exports.hireTrainer = async (req, res) => {
       return res.status(400).json({ error: message });
     }
 
-    // Check enrollment deadline
     if (post.enrollment_deadline && getDateOnlyString(post.enrollment_deadline) < getCurrentWibDateString()) {
       return res.status(400).json({ error: 'Enrollment for this post has closed' });
     }
 
-    // Check slot availability
     if (post.max_slots) {
       const [activeHires] = await require('../../config/db').pool.query(
         `SELECT COUNT(*) as count FROM trainer_hires
@@ -833,7 +828,6 @@ exports.acceptHire = async (req, res) => {
     if (result === 'full') return res.status(400).json({ error: 'Cannot accept: post is already full.' });
     if (!result) return res.status(400).json({ error: 'Hire not found, not yours, or not awaiting trainer response' });
 
-    // Notify member
     const [[hireInfo]] = await pool.query(
       `SELECT th.*, tp.title AS post_title, tp.id AS post_id,
               m.name AS member_name, m.fcm_token AS member_fcm,
@@ -850,7 +844,6 @@ exports.acceptHire = async (req, res) => {
       await saveNotification(hireInfo.member_id, mTitle, mBody, 'trainer_hire');
       if (hireInfo.member_fcm) sendPushNotification(hireInfo.member_fcm, mTitle, mBody, {type: 'trainer_hire_active', post_id: String(hireInfo.post_id)}).catch(() => {});
 
-      // Notify trainer confirmation
       const tTitle = 'Hire Accepted';
       const tBody = `You accepted ${hireInfo.member_name}'s hire request for "${hireInfo.post_title}".`;
       await saveNotification(req.user.id, tTitle, tBody, 'trainer_hire');
@@ -878,7 +871,6 @@ exports.declineHire = async (req, res) => {
     await TrainerHire.markCancelled(hire.id);
     await TrainerPost.reactivateIfSystemClosed(hire.post_id);
 
-    // Notify member
     const [[hireInfo]] = await pool.query(
       `SELECT th.*, tp.title AS post_title,
               m.name AS member_name, m.fcm_token AS member_fcm,
@@ -934,9 +926,7 @@ exports.endHire = async (req, res) => {
        WHERE th.id = ?`, [req.params.hire_id]
     );
     if (hireInfo) {
-      // Notify member confirmation
       await saveNotification(req.user.id, 'Subscription Ended', `Your subscription to "${hireInfo.post_title}" has ended. You can now leave a review!`, 'trainer_hire');
-      // Notify trainer
       const tTitle = 'Member Ended Subscription';
       const tBody = `${hireInfo.member_name} ended their subscription to "${hireInfo.post_title}".`;
       await saveNotification(hireInfo.trainer_id, tTitle, tBody, 'trainer_hire', {
@@ -945,7 +935,6 @@ exports.endHire = async (req, res) => {
       });
       if (hireInfo.trainer_fcm) sendPushNotification(hireInfo.trainer_fcm, tTitle, tBody, {type: 'hire_ended'}).catch(() => {});
 
-      // Auto-reactivate post if it was deactivated by the system (slots full) and enrollment hasn't expired
       await TrainerPost.reactivateIfSystemClosed(hireInfo.post_id);
     }
 
@@ -1035,14 +1024,12 @@ exports.submitReview = async (req, res) => {
     const alreadyReviewed = await TrainerReview.existsByHire(hire.id);
     if (alreadyReviewed) return res.status(400).json({ error: 'You already reviewed this hire' });
 
-    // Block reviews on disputed hires
     const { Dispute } = require('../session/session.model');
     const dispute = await Dispute.findOpenByHire(hire.id);
     if (dispute) {
       return res.status(400).json({ error: 'Cannot review while a dispute is open for this hire' });
     }
 
-    // Check session attendance gate (minimum 50% of confirmed sessions)
     const { Session } = require('../session/session.model');
     const stats = await Session.getStats(hire.id);
     const total = Number(stats.total) || 0;
@@ -1065,7 +1052,6 @@ exports.submitReview = async (req, res) => {
       sessions_attended: confirmed,
     });
 
-    // Notify trainer of new review
     const [[postInfo]] = await pool.query(
       `SELECT tp.trainer_id, tp.title, t.fcm_token AS trainer_fcm, m.name AS member_name
        FROM trainer_posts tp

@@ -61,7 +61,6 @@ exports.reviewCertification = async (req, res) => {
     if (user.role !== 'trainer') return res.status(400).json({ error: 'User is not a trainer' });
     await User.findByIdAndUpdate(req.params.id, { certification_status: status });
 
-    // Notify trainer of cert review result
     const title =
       status === 'approved'
         ? '✅ Certification Approved'

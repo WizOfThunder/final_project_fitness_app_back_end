@@ -139,7 +139,6 @@ const TrainerPost = {
     return { id: result.insertId, ...data };
   },
   async update(id, trainerId, data) {
-    // Strip undefined values so partial updates don't overwrite existing columns with NULL
     const clean = Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined));
     const [result] = await pool.query(
       'UPDATE trainer_posts SET ? WHERE id = ? AND trainer_id = ?',
@@ -327,7 +326,6 @@ const TrainerHire = {
     );
     return result.affectedRows > 0;
   },
-  // For public posts: enroll until the cohort start date, then activate
   async activateFromPayment(orderId) {
     const [[hire]] = await pool.query(
       `SELECT th.id, th.post_id, th.status, tp.visibility, tp.program_start_date, tp.max_slots,
@@ -349,7 +347,6 @@ const TrainerHire = {
     const hasProgramStarted = start_date <= getCurrentWibDateString();
 
     if (!hasProgramStarted) {
-      // Public posts always enroll first and activate on their program start date.
       await pool.query(
         "UPDATE trainer_hires SET status = 'enrolled', start_date = ?, end_date = ?, trainer_response_deadline = NULL WHERE payment_order_id = ?",
         [start_date, end_date, orderId]
@@ -358,8 +355,6 @@ const TrainerHire = {
       hire.start_date = start_date;
       hire.end_date = end_date;
     } else {
-      // If payment confirms on/after the cohort start date, activate immediately
-      // but still keep the original month window from the program start date.
       await pool.query(
         "UPDATE trainer_hires SET status = 'active', start_date = ?, end_date = ?, trainer_response_deadline = NULL WHERE payment_order_id = ?",
         [start_date, end_date, orderId]
@@ -367,7 +362,6 @@ const TrainerHire = {
       hire.flow = 'active';
       hire.start_date = start_date;
       hire.end_date = end_date;
-      // Generate sessions from post schedule
       if (hire.schedule || true) {
         const [[postData]] = await pool.query('SELECT schedule FROM trainer_posts WHERE id = ?', [hire.post_id]);
         if (postData?.schedule) {
@@ -375,7 +369,6 @@ const TrainerHire = {
           await Session.generateForHire(hire.id, schedule, start_date, end_date).catch(() => {});
         }
       }
-      // Auto-close post if max_slots now reached
       if (hire.max_slots) {
         const [[{ cnt }]] = await pool.query(
           "SELECT COUNT(*) AS cnt FROM trainer_hires WHERE post_id = ? AND status IN ('enrolled','active')",
@@ -503,7 +496,6 @@ const TrainerHire = {
       || (hire.status === 'pending_payment' && !!hire.trainer_response_deadline);
     if (!awaitingTrainerApproval) return false;
 
-    // Re-check slot count to prevent over-acceptance
     const post = rows[0];
     if (post.max_slots) {
       const [[{ cnt }]] = await pool.query(
@@ -521,14 +513,12 @@ const TrainerHire = {
       [start_date, end_date, id]
     );
 
-    // Generate sessions from post schedule
     const [[postData]] = await pool.query('SELECT schedule FROM trainer_posts WHERE id = ?', [hire.post_id]);
     if (postData?.schedule) {
       const schedule = JSON.parse(postData.schedule);
       await Session.generateForHire(id, schedule, start_date, end_date).catch(() => {});
     }
 
-    // Auto-close post if now full
     if (post.max_slots) {
       const [[{ cnt }]] = await pool.query(
         "SELECT COUNT(*) AS cnt FROM trainer_hires WHERE post_id = ? AND status IN ('enrolled','active')",

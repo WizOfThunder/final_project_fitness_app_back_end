@@ -9,8 +9,6 @@ function resolvePaymentStatus(currentStatus, nextStatus) {
     return nextStatus;
   }
 
-  // Once the app has moved a settled payment into a refund state,
-  // do not let a late/out-of-order settlement callback regress it.
   if (
     ['refunded', 'partial_refund'].includes(currentStatus) &&
     ['pending', 'settlement'].includes(nextStatus)

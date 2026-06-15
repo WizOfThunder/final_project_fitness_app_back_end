@@ -155,7 +155,7 @@ exports.sendBroadcast = async (req, res) => {
   }
 };
 
-// TEMPORARY: for FCM testing only — remove before production
+// FCM testing
 exports.testSelf = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);

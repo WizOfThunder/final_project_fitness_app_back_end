@@ -42,7 +42,6 @@ function initializeSocket(server) {
         io.to(String(receiver_id)).emit('receive_message', chatMessage);
         io.to(String(sender_id)).emit('message_sent', chatMessage);
 
-        // Only send FCM push if receiver is not actively connected to the socket
         const receiverSockets = await io.in(String(receiver_id)).fetchSockets();
         if (receiverSockets.length === 0) {
           const receiver = await User.findById(receiver_id);
