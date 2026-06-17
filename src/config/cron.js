@@ -8,7 +8,7 @@ const { pool } = require('./db');
 const { triggerAchievements } = require('../modules/achievement/achievement.helper');
 const { sendPushNotification, sendMulticastNotification } = require('../modules/notification/notification.service');
 const { saveNotification } = require('../modules/notification/notification.helper');
-const { reverseMidtransTransaction } = require('./midtrans');
+const { reverseMidtransTransaction, getMidtransTransactionStatus } = require('./midtrans');
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const WIB_TIMEZONE = 'Asia/Jakarta';
@@ -17,6 +17,16 @@ const WIB_CURRENT_DATE_SQL = `(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Jakarta')::d
 const MIDTRANS_BASE = process.env.NODE_ENV === 'production'
   ? 'https://api.midtrans.com'
   : 'https://api.sandbox.midtrans.com';
+
+function mapMidtransPaymentStatus(transactionStatus, fraudStatus) {
+  if (transactionStatus === 'capture' && fraudStatus === 'accept') return 'settlement';
+  if (transactionStatus === 'settlement') return 'settlement';
+  if (transactionStatus === 'refund') return 'refunded';
+  if (transactionStatus === 'partial_refund') return 'partial_refund';
+  if (transactionStatus === 'expire') return 'expired';
+  if (['cancel', 'deny'].includes(transactionStatus)) return 'failed';
+  return 'pending';
+}
 
 function getNowWIB() {
   return new Date(Date.now() + 7 * 60 * 60 * 1000);
@@ -410,6 +420,117 @@ function startCronJobs() {
       }
     } catch (err) {
       console.error('[CRON] Error in public hire completion job:', err.message);
+    }
+
+    console.log('[CRON] Syncing stale pending payments with Midtrans...');
+    try {
+      const staleThreshold = new Date(Date.now() - 30 * 60 * 1000);
+      const [stalePayments] = await pool.query(
+        `SELECT p.id, p.order_id, p.status, p.transaction_id, p.payment_type
+         FROM payments p
+         WHERE p.status = 'pending' AND p.created_at < ?`,
+        [staleThreshold],
+      );
+
+      for (const payment of stalePayments) {
+        try {
+          if (payment.order_id.startsWith('hire-')) {
+            const [[hire]] = await pool.query(
+              'SELECT id, status FROM trainer_hires WHERE payment_order_id = ?',
+              [payment.order_id],
+            );
+
+            if (hire && ['expired', 'cancelled', 'ended'].includes(hire.status)) {
+              const terminalStatus = hire.status === 'cancelled' ? 'failed' : hire.status;
+              await Payment.findOneAndUpdate(
+                { order_id: payment.order_id },
+                { status: terminalStatus, updated_at: new Date() },
+              );
+              console.log(`[CRON] Payment ${payment.order_id} synced to ${terminalStatus} (hire ${hire.id} is ${hire.status})`);
+              continue;
+            }
+          }
+
+          const midtrans = await getMidtransTransactionStatus(payment.order_id);
+          const mappedStatus = mapMidtransPaymentStatus(
+            midtrans.transaction_status,
+            midtrans.fraud_status,
+          );
+
+          if (mappedStatus === 'pending') {
+            continue;
+          }
+
+          await Payment.findOneAndUpdate(
+            { order_id: payment.order_id },
+            {
+              status: mappedStatus,
+              transaction_id: midtrans.transaction_id || payment.transaction_id,
+              payment_type: midtrans.payment_type || payment.payment_type,
+              updated_at: new Date(),
+            },
+          );
+          console.log(`[CRON] Payment ${payment.order_id} synced: ${payment.status} → ${mappedStatus}`);
+
+          if (payment.order_id.startsWith('hire-')) {
+            if (mappedStatus === 'settlement') {
+              const [[hirePost]] = await pool.query(
+                'SELECT tp.visibility FROM trainer_hires th JOIN trainer_posts tp ON tp.id = th.post_id WHERE th.payment_order_id = ?',
+                [payment.order_id],
+              );
+              if (hirePost?.visibility === 'public') {
+                const hire = await TrainerHire.activateFromPayment(payment.order_id);
+                if (hire) {
+                  const startStr = hire.program_start_date
+                    ? new Date(hire.program_start_date).toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric'})
+                    : 'the scheduled date';
+                  const mTitle = 'Enrollment Confirmed!';
+                  const mBody = `You're enrolled in "${hire.post_title}". The program starts on ${startStr}.`;
+                  await saveNotification(hire.member_id, mTitle, mBody, 'trainer_hire');
+                  if (hire.member_fcm_token) {
+                    sendPushNotification(hire.member_fcm_token, mTitle, mBody, {type: 'trainer_enrolled', post_id: String(hire.post_id)}).catch(() => {});
+                  }
+                  const tTitle = 'New Enrollment';
+                  const tBody = `${hire.member_name} enrolled in "${hire.post_title}". Program starts ${startStr}.`;
+                  await saveNotification(hire.trainer_id, tTitle, tBody, 'trainer_hire');
+                  if (hire.trainer_fcm_token) {
+                    sendPushNotification(hire.trainer_fcm_token, tTitle, tBody, {type: 'trainer_enrolled'}).catch(() => {});
+                  }
+                }
+              } else {
+                const deadline = await TrainerHire.setPendingTrainerResponse(payment.order_id);
+                if (deadline) {
+                  const [[hireInfo]] = await pool.query(
+                    `SELECT th.member_id, m.name AS member_name, tp.title AS post_title, t.id AS trainer_id, t.fcm_token AS trainer_fcm
+                     FROM trainer_hires th
+                     JOIN trainer_posts tp ON tp.id = th.post_id
+                     JOIN users m ON m.id = th.member_id
+                     JOIN users t ON t.id = tp.trainer_id
+                     WHERE th.payment_order_id = ?`,
+                    [payment.order_id],
+                  );
+                  if (hireInfo) {
+                    const deadlineStr = new Date(deadline).toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric'});
+                    const tTitle = 'New Hire Request';
+                    const tBody = `${hireInfo.member_name} wants to hire you for "${hireInfo.post_title}". Please accept or decline by ${deadlineStr}.`;
+                    await saveNotification(hireInfo.trainer_id, tTitle, tBody, 'trainer_hire');
+                    if (hireInfo.trainer_fcm) {
+                      sendPushNotification(hireInfo.trainer_fcm, tTitle, tBody, {type: 'trainer_hire_request'}).catch(() => {});
+                    }
+                  }
+                }
+              }
+            } else if (['failed', 'expired', 'refunded', 'partial_refund'].includes(mappedStatus)) {
+              await TrainerHire.cancelPendingPayment(payment.order_id);
+              console.log(`[CRON] Cancelled hire for payment ${payment.order_id}`);
+            }
+          }
+        } catch (err) {
+          console.error(`[CRON] Failed to sync payment ${payment.order_id}:`, err.message);
+        }
+      }
+    } catch (err) {
+      console.error('[CRON] Error in pending payment sync:', err.message);
     }
   });
 
