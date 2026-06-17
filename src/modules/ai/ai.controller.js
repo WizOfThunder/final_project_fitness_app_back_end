@@ -1737,10 +1737,6 @@ Rules:
 - Recipes marked kind:snack should only be assigned to snack, morning_snack, or afternoon_snack
 - For breakfast, lunch, and dinner, prefer recipes marked kind:meal
 - Omit all non-selected days entirely from the plan output.
-- If legacy flexibility preferences are present, accommodate them while keeping the overall week aligned to the user's goal.
-- For "Weekends more flexible", prefer placing the more flexible choices on Saturday and Sunday.
-- For "1 flexible day per week" with no custom day specified, default to Saturday.
-- Legacy flexibility handling must still use only the provided recipes and should not turn the whole week off-plan.
 - Only assign solid food meals for breakfast, lunch, and dinner — drinks, smoothies, shakes, or juices should only be assigned as snacks if appropriate
 - ${activityNote ? 'Use the recent activity note only as soft context for recovery and practicality. Do not aggressively change meal strictness or infer precise calorie needs from it.' : 'Keep the meal plan practical and sustainable for the user\'s likely recovery and adherence level.'}
 
