@@ -59,6 +59,9 @@ exports.reviewCertification = async (req, res) => {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
     if (user.role !== 'trainer') return res.status(400).json({ error: 'User is not a trainer' });
+    if (user.certification_status === status) {
+      return res.json({ message: `Trainer certification already ${status}` });
+    }
     await User.findByIdAndUpdate(req.params.id, { certification_status: status });
 
     try {

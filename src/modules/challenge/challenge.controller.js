@@ -143,6 +143,9 @@ exports.reviewChallenge = async (req, res) => {
 
     const challenge = await Challenge.findById(req.params.id);
     if (!challenge) return res.status(404).json({ error: 'Challenge not found' });
+    if (challenge.status === action) {
+      return res.json({ message: `Challenge already ${action === 'active' ? 'approved' : 'rejected'}` });
+    }
 
     await pool.query('UPDATE challenges SET status = ?, validation_note = ? WHERE id = ?', [action, note || null, req.params.id]);
 

@@ -26,6 +26,11 @@ exports.validatePlan = async (req, res) => {
     }
 
     const table = planType === 'workout' ? 'workout_plans' : 'diet_plans';
+    const [[existing]] = await pool.query(`SELECT status FROM ${table} WHERE id = ?`, [plan_id]);
+    if (!existing) return res.status(404).json({ error: 'Plan not found' });
+    if (existing.status === action) {
+      return res.json({ message: 'Plan already validated', status: action, validation_note: note || null });
+    }
     const [result] = await pool.query(`UPDATE ${table} SET status = ?, validation_note = ? WHERE id = ?`, [action, note || null, plan_id]);
     if (result.affectedRows === 0) return res.status(404).json({ error: 'Plan not found' });
 
