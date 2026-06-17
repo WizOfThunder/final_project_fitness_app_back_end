@@ -70,30 +70,32 @@ exports.startSession = async (req, res) => {
       [req.params.session_id]
     );
     if (session) {
-      const title = 'Session Started!';
-      const body = `Your trainer has started the session for "${session.post_title}". Your confirmation code is ${code}. Enter it within 30 minutes to confirm attendance.`;
-      await saveNotification(session.member_id, title, body, 'session', {
-        screen: 'MemberSessions',
-        params: {
-          hireId: session.hire_id,
-          trainerName: session.trainer_name,
-          hireStatus: session.hire_status,
-          focusSessionId: session.id,
-        },
-        sessionId: session.id,
-        sessionCode: code,
-      });
-      if (session.member_fcm) {
-        sendPushNotification(session.member_fcm, title, body, {
-          type: 'session_started',
-          session_id: String(req.params.session_id),
-          hire_id: String(session.hire_id),
-          hire_status: String(session.hire_status || ''),
-          trainer_name: session.trainer_name || '',
-          focus_session_id: String(session.id),
-          session_code: String(code),
-        }).catch(() => {});
-      }
+      try {
+        const title = 'Session Started!';
+        const body = `Your trainer has started the session for "${session.post_title}". Your confirmation code is ${code}. Enter it within 30 minutes to confirm attendance.`;
+        await saveNotification(session.member_id, title, body, 'session', {
+          screen: 'MemberSessions',
+          params: {
+            hireId: session.hire_id,
+            trainerName: session.trainer_name,
+            hireStatus: session.hire_status,
+            focusSessionId: session.id,
+          },
+          sessionId: session.id,
+          sessionCode: code,
+        });
+        if (session.member_fcm) {
+          sendPushNotification(session.member_fcm, title, body, {
+            type: 'session_started',
+            session_id: String(req.params.session_id),
+            hire_id: String(session.hire_id),
+            hire_status: String(session.hire_status || ''),
+            trainer_name: session.trainer_name || '',
+            focus_session_id: String(session.id),
+            session_code: String(code),
+          }).catch(() => {});
+        }
+      } catch (_) {}
     }
 
     res.json({ code, message: 'Session started. Share this code with your member.' });
@@ -121,21 +123,23 @@ exports.confirmSession = async (req, res) => {
       [req.params.session_id]
     );
     if (session) {
-      const title = 'Attendance Confirmed';
-      const body = `${session.member_name} confirmed attendance for "${session.post_title}".`;
-      await saveNotification(session.trainer_id, title, body, 'session');
-      if (session.trainer_fcm) {
-        sendPushNotification(session.trainer_fcm, title, body, { type: 'session_confirmed' }).catch(() => {});
-      }
+      try {
+        const title = 'Attendance Confirmed';
+        const body = `${session.member_name} confirmed attendance for "${session.post_title}".`;
+        await saveNotification(session.trainer_id, title, body, 'session');
+        if (session.trainer_fcm) {
+          sendPushNotification(session.trainer_fcm, title, body, { type: 'session_confirmed' }).catch(() => {});
+        }
 
-      await ActivityLog.findOneAndUpdate(
-        { user_id: req.user.id, date: session.scheduled_date },
-        { workout_completed: 1 },
-        { upsert: true }
-      );
+        await ActivityLog.findOneAndUpdate(
+          { user_id: req.user.id, date: session.scheduled_date },
+          { workout_completed: 1 },
+          { upsert: true }
+        );
 
-      const { triggerAchievements } = require('../achievement/achievement.helper');
-      await triggerAchievements(req.user.id);
+        const { triggerAchievements } = require('../achievement/achievement.helper');
+        await triggerAchievements(req.user.id);
+      } catch (_) {}
     }
 
     res.json({ message: 'Attendance confirmed!' });
@@ -174,28 +178,30 @@ exports.createDispute = async (req, res) => {
       description: description || null,
     });
 
-    const [admins] = await pool.query("SELECT id, fcm_token FROM users WHERE role = 'admin'");
-    const disputeTitle = 'New Hire Dispute';
-    const disputeBody = `${hire.member_name || 'A member'} raised a dispute: ${reason}`;
-    const notificationData = {
-      screen: 'AdminDisputes',
-      params: {},
-      intent: 'admin_dispute',
-      actor_name: hire.member_name || 'Member',
-      actor_role: 'member',
-      dispute_id: Number(dispute.id),
-      event_key: `admin:dispute:${dispute.id}`,
-    };
-    for (const admin of admins) {
-      await saveNotification(admin.id, disputeTitle, disputeBody, 'dispute', notificationData);
-      if (admin.fcm_token) {
-        sendPushNotification(admin.fcm_token, disputeTitle, disputeBody, {
-          type: 'dispute',
-          dispute_id: String(dispute.id),
-          actor_name: hire.member_name || 'Member',
-        }).catch(() => {});
+    try {
+      const [admins] = await pool.query("SELECT id, fcm_token FROM users WHERE role = 'admin'");
+      const disputeTitle = 'New Hire Dispute';
+      const disputeBody = `${hire.member_name || 'A member'} raised a dispute: ${reason}`;
+      const notificationData = {
+        screen: 'AdminDisputes',
+        params: {},
+        intent: 'admin_dispute',
+        actor_name: hire.member_name || 'Member',
+        actor_role: 'member',
+        dispute_id: Number(dispute.id),
+        event_key: `admin:dispute:${dispute.id}`,
+      };
+      for (const admin of admins) {
+        await saveNotification(admin.id, disputeTitle, disputeBody, 'dispute', notificationData);
+        if (admin.fcm_token) {
+          sendPushNotification(admin.fcm_token, disputeTitle, disputeBody, {
+            type: 'dispute',
+            dispute_id: String(dispute.id),
+            actor_name: hire.member_name || 'Member',
+          }).catch(() => {});
+        }
       }
-    }
+    } catch (_) {}
 
     res.status(201).json(dispute);
   } catch (error) {
@@ -278,43 +284,45 @@ exports.resolveDispute = async (req, res) => {
       [req.params.dispute_id]
     );
     if (dispute) {
-      const title = status === 'resolved' ? 'Dispute Resolved' : 'Dispute Rejected';
-      const noteSuffix = note ? ` Note: ${note}` : '';
-      const memberBody = status === 'resolved'
-        ? `Your dispute has been resolved by admin. Your subscription has been ended.${noteSuffix}`
-        : `Your dispute was reviewed and rejected.${noteSuffix}`;
-      const trainerBody = status === 'resolved'
-        ? `A member dispute was resolved by admin. The subscription has been ended.${noteSuffix}`
-        : `A member dispute was reviewed by admin and rejected.${noteSuffix}`;
+      try {
+        const title = status === 'resolved' ? 'Dispute Resolved' : 'Dispute Rejected';
+        const noteSuffix = note ? ` Note: ${note}` : '';
+        const memberBody = status === 'resolved'
+          ? `Your dispute has been resolved by admin. Your subscription has been ended.${noteSuffix}`
+          : `Your dispute was reviewed and rejected.${noteSuffix}`;
+        const trainerBody = status === 'resolved'
+          ? `A member dispute was resolved by admin. The subscription has been ended.${noteSuffix}`
+          : `A member dispute was reviewed by admin and rejected.${noteSuffix}`;
 
-      await saveNotification(dispute.member_id, title, memberBody, 'dispute', {
-        screen: 'MemberSessions',
-        params: {
-          hireId: dispute.hire_id,
-          trainerName: dispute.trainer_name,
-          hireStatus: dispute.hire_status,
-        },
-      });
-      if (dispute.member_fcm) {
-        sendPushNotification(dispute.member_fcm, title, memberBody, {
-          type: status === 'resolved' ? 'dispute_resolved' : 'dispute_rejected',
-          hire_id: String(dispute.hire_id),
-        }).catch(() => {});
-      }
+        await saveNotification(dispute.member_id, title, memberBody, 'dispute', {
+          screen: 'MemberSessions',
+          params: {
+            hireId: dispute.hire_id,
+            trainerName: dispute.trainer_name,
+            hireStatus: dispute.hire_status,
+          },
+        });
+        if (dispute.member_fcm) {
+          sendPushNotification(dispute.member_fcm, title, memberBody, {
+            type: status === 'resolved' ? 'dispute_resolved' : 'dispute_rejected',
+            hire_id: String(dispute.hire_id),
+          }).catch(() => {});
+        }
 
-      await saveNotification(dispute.trainer_id, title, trainerBody, 'dispute', {
-        screen: 'TrainerHireManagement',
-        params: {
-          initialTab: status === 'resolved' ? 'past' : 'active',
-          hireId: dispute.hire_id,
-        },
-      });
-      if (dispute.trainer_fcm) {
-        sendPushNotification(dispute.trainer_fcm, title, trainerBody, {
-          type: status === 'resolved' ? 'dispute_resolved' : 'dispute_rejected',
-          hire_id: String(dispute.hire_id),
-        }).catch(() => {});
-      }
+        await saveNotification(dispute.trainer_id, title, trainerBody, 'dispute', {
+          screen: 'TrainerHireManagement',
+          params: {
+            initialTab: status === 'resolved' ? 'past' : 'active',
+            hireId: dispute.hire_id,
+          },
+        });
+        if (dispute.trainer_fcm) {
+          sendPushNotification(dispute.trainer_fcm, title, trainerBody, {
+            type: status === 'resolved' ? 'dispute_resolved' : 'dispute_rejected',
+            hire_id: String(dispute.hire_id),
+          }).catch(() => {});
+        }
+      } catch (_) {}
     }
 
     res.json({ message: `Dispute ${status}` });

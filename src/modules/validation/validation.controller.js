@@ -31,26 +31,28 @@ exports.validatePlan = async (req, res) => {
 
     await ValidationLog.create({ plan_id, plan_type: planType, admin_id: req.user.id, action, note: note || null });
 
-    const [[planRow]] = await pool.query(
-      `SELECT user_id FROM ${table} WHERE id = ?`, [plan_id]
-    );
-    if (planRow) {
-      const [[userRow]] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [planRow.user_id]);
-      const isApproved = action === 'verified';
-      const title = isApproved
-        ? `✅ ${planType === 'workout' ? 'Workout' : 'Diet'} Plan Approved`
-        : `❌ ${planType === 'workout' ? 'Workout' : 'Diet'} Plan Rejected`;
-      const body = isApproved
-        ? `Your AI-generated ${planType} plan has been reviewed and approved by an admin.`
-        : `Your AI-generated ${planType} plan was rejected${note ? `: ${note}` : '. Please generate a new one.'}`;
-      await saveNotification(planRow.user_id, title, body, 'general', {
-        screen: planType === 'workout' ? 'AIWorkoutPlan' : 'AIDietPlan',
-        params: {},
-        intent: 'plan_validated',
-        plan_type: planType,
-      });
-      if (userRow?.fcm_token) sendPushNotification(userRow.fcm_token, title, body, {type: 'plan_validated', plan_type: planType, status: action}).catch(() => {});
-    }
+    try {
+      const [[planRow]] = await pool.query(
+        `SELECT user_id FROM ${table} WHERE id = ?`, [plan_id]
+      );
+      if (planRow) {
+        const [[userRow]] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [planRow.user_id]);
+        const isApproved = action === 'verified';
+        const title = isApproved
+          ? `✅ ${planType === 'workout' ? 'Workout' : 'Diet'} Plan Approved`
+          : `❌ ${planType === 'workout' ? 'Workout' : 'Diet'} Plan Rejected`;
+        const body = isApproved
+          ? `Your AI-generated ${planType} plan has been reviewed and approved by an admin.`
+          : `Your AI-generated ${planType} plan was rejected${note ? `: ${note}` : '. Please generate a new one.'}`;
+        await saveNotification(planRow.user_id, title, body, 'general', {
+          screen: planType === 'workout' ? 'AIWorkoutPlan' : 'AIDietPlan',
+          params: {},
+          intent: 'plan_validated',
+          plan_type: planType,
+        });
+        if (userRow?.fcm_token) sendPushNotification(userRow.fcm_token, title, body, {type: 'plan_validated', plan_type: planType, status: action}).catch(() => {});
+      }
+    } catch (_) {}
 
     res.json({ message: 'Plan validated', status: action, validation_note: note || null });
   } catch (error) {

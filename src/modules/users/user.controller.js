@@ -61,20 +61,22 @@ exports.reviewCertification = async (req, res) => {
     if (user.role !== 'trainer') return res.status(400).json({ error: 'User is not a trainer' });
     await User.findByIdAndUpdate(req.params.id, { certification_status: status });
 
-    const title =
-      status === 'approved'
-        ? '✅ Certification Approved'
-        : status === 'rejected'
-          ? '❌ Certification Rejected'
-          : '⏳ Certification Pending Review';
-    const body =
-      status === 'approved'
-        ? 'Your trainer certification has been approved! You can now create posts and accept members.'
-        : status === 'rejected'
-          ? 'Your trainer certification was rejected. Please contact an admin for more information.'
-          : 'Your trainer certification status is now pending review.';
-    await saveNotification(user.id, title, body, 'general');
-    if (user.fcm_token) sendPushNotification(user.fcm_token, title, body, {type: 'cert_review', status}).catch(() => {});
+    try {
+      const title =
+        status === 'approved'
+          ? '✅ Certification Approved'
+          : status === 'rejected'
+            ? '❌ Certification Rejected'
+            : '⏳ Certification Pending Review';
+      const body =
+        status === 'approved'
+          ? 'Your trainer certification has been approved! You can now create posts and accept members.'
+          : status === 'rejected'
+            ? 'Your trainer certification was rejected. Please contact an admin for more information.'
+            : 'Your trainer certification status is now pending review.';
+      await saveNotification(user.id, title, body, 'general');
+      if (user.fcm_token) sendPushNotification(user.fcm_token, title, body, {type: 'cert_review', status}).catch(() => {});
+    } catch (_) {}
 
     res.json({ message: `Trainer certification ${status}` });
   } catch (error) {

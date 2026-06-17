@@ -103,29 +103,31 @@ exports.createChallenge = async (req, res) => {
     const challenge = await Challenge.create({ ...req.body, created_by: req.user.id, status });
 
     if (status === 'pending') {
-      const creator = await User.findById(req.user.id);
-      const actorName = creator?.name || 'A trainer';
-      const title = 'Challenge Submitted for Approval';
-      const body = `${actorName} submitted "${challenge.title}" for approval.`;
-      await notifyAdmins(
-        title,
-        body,
-        'admin_challenge_submission',
-        {
-          screen: 'ManageChallenge',
-          params: { initialTab: 'pending' },
-          intent: 'admin_challenge_submission',
-          actor_name: actorName,
-          actor_role: 'trainer',
-          challenge_id: Number(challenge.id),
-          event_key: `admin:challenge_submission:${challenge.id}`,
-        },
-        {
-          type: 'admin_challenge_submission',
-          challenge_id: String(challenge.id),
-          actor_name: actorName,
-        },
-      );
+      try {
+        const creator = await User.findById(req.user.id);
+        const actorName = creator?.name || 'A trainer';
+        const title = 'Challenge Submitted for Approval';
+        const body = `${actorName} submitted "${challenge.title}" for approval.`;
+        await notifyAdmins(
+          title,
+          body,
+          'admin_challenge_submission',
+          {
+            screen: 'ManageChallenge',
+            params: { initialTab: 'pending' },
+            intent: 'admin_challenge_submission',
+            actor_name: actorName,
+            actor_role: 'trainer',
+            challenge_id: Number(challenge.id),
+            event_key: `admin:challenge_submission:${challenge.id}`,
+          },
+          {
+            type: 'admin_challenge_submission',
+            challenge_id: String(challenge.id),
+            actor_name: actorName,
+          },
+        );
+      } catch (_) {}
     }
 
     res.status(201).json(challenge);
@@ -144,30 +146,32 @@ exports.reviewChallenge = async (req, res) => {
 
     await pool.query('UPDATE challenges SET status = ?, validation_note = ? WHERE id = ?', [action, note || null, req.params.id]);
 
-    const trainer = await User.findById(challenge.created_by);
-    if (trainer) {
-      const approved = action === 'active';
-      const notifTitle = approved ? '✅ Challenge Approved' : '❌ Challenge Rejected';
-      const notifMessage = approved
-        ? `Your challenge "${challenge.title}" has been approved and is now live!`
-        : `Your challenge "${challenge.title}" was rejected.${note ? ` Reason: ${note}` : ''}`;
-      await saveNotification(
-        trainer.id,
-        notifTitle,
-        notifMessage,
-        'challenge_review',
-        {
-          screen: 'ChallengeDetail',
-          params: {challengeId: challenge.id},
-        },
-      );
-      if (trainer.fcm_token) {
-        await sendPushNotification(
-          trainer.fcm_token, notifTitle, notifMessage,
-          { type: 'challenge_review', challenge_id: String(challenge.id), status: action }
-        ).catch(() => {});
+    try {
+      const trainer = await User.findById(challenge.created_by);
+      if (trainer) {
+        const approved = action === 'active';
+        const notifTitle = approved ? '✅ Challenge Approved' : '❌ Challenge Rejected';
+        const notifMessage = approved
+          ? `Your challenge "${challenge.title}" has been approved and is now live!`
+          : `Your challenge "${challenge.title}" was rejected.${note ? ` Reason: ${note}` : ''}`;
+        await saveNotification(
+          trainer.id,
+          notifTitle,
+          notifMessage,
+          'challenge_review',
+          {
+            screen: 'ChallengeDetail',
+            params: {challengeId: challenge.id},
+          },
+        );
+        if (trainer.fcm_token) {
+          await sendPushNotification(
+            trainer.fcm_token, notifTitle, notifMessage,
+            { type: 'challenge_review', challenge_id: String(challenge.id), status: action }
+          ).catch(() => {});
+        }
       }
-    }
+    } catch (_) {}
 
     res.json({ message: `Challenge ${action === 'active' ? 'approved' : 'rejected'}` });
   } catch (error) {
@@ -272,37 +276,39 @@ exports.submitCompletion = async (req, res) => {
       note: req.body.note || null,
     });
 
-    const [member, creator] = await Promise.all([
-      User.findById(req.user.id),
-      User.findById(challenge.created_by),
-    ]);
+    try {
+      const [member, creator] = await Promise.all([
+        User.findById(req.user.id),
+        User.findById(challenge.created_by),
+      ]);
 
-    if (creator?.role === 'admin') {
-      const actorName = member?.name || 'A member';
-      const title = 'Challenge Review Needed';
-      const body = `${actorName} submitted proof for "${challenge.title}".`;
-      await notifyAdmins(
-        title,
-        body,
-        'admin_challenge_review',
-        {
-          screen: 'ManageChallenge',
-          params: { initialTab: 'reviews' },
-          intent: 'admin_challenge_review',
-          actor_name: actorName,
-          actor_role: 'member',
-          challenge_id: Number(challenge.id),
-          request_id: Number(request.id),
-          event_key: `admin:challenge_review:${request.id}`,
-        },
-        {
-          type: 'admin_challenge_review',
-          challenge_id: String(challenge.id),
-          request_id: String(request.id),
-          actor_name: actorName,
-        },
-      );
-    }
+      if (creator?.role === 'admin') {
+        const actorName = member?.name || 'A member';
+        const title = 'Challenge Review Needed';
+        const body = `${actorName} submitted proof for "${challenge.title}".`;
+        await notifyAdmins(
+          title,
+          body,
+          'admin_challenge_review',
+          {
+            screen: 'ManageChallenge',
+            params: { initialTab: 'reviews' },
+            intent: 'admin_challenge_review',
+            actor_name: actorName,
+            actor_role: 'member',
+            challenge_id: Number(challenge.id),
+            request_id: Number(request.id),
+            event_key: `admin:challenge_review:${request.id}`,
+          },
+          {
+            type: 'admin_challenge_review',
+            challenge_id: String(challenge.id),
+            request_id: String(request.id),
+            actor_name: actorName,
+          },
+        );
+      }
+    } catch (_) {}
 
     res.status(201).json(request);
   } catch (error) {
@@ -326,18 +332,20 @@ exports.bulkApproveRequests = async (req, res) => {
       await CompletionRequest.review(req_.id, 'approved', req.user.id);
       await UserChallenge.complete(req_.user_challenge_id);
       await triggerAchievements(req_.user_id);
-      const [[memberRow]] = await pool.query(
-        `SELECT u.fcm_token, c.title AS challenge_title
-         FROM users u, challenges c
-         WHERE u.id = ? AND c.id = ?`,
-        [req_.user_id, challenge_id]
-      );
-      if (memberRow) {
-        const title = '🏆 Completion Approved!';
-        const body = `Your completion for "${memberRow.challenge_title}" was approved. Reward granted!`;
-        await saveNotification(req_.user_id, title, body, 'achievement');
-        if (memberRow.fcm_token) sendPushNotification(memberRow.fcm_token, title, body, {type: 'challenge_review', status: 'approved'}).catch(() => {});
-      }
+      try {
+        const [[memberRow]] = await pool.query(
+          `SELECT u.fcm_token, c.title AS challenge_title
+           FROM users u, challenges c
+           WHERE u.id = ? AND c.id = ?`,
+          [req_.user_id, challenge_id]
+        );
+        if (memberRow) {
+          const title = '🏆 Completion Approved!';
+          const body = `Your completion for "${memberRow.challenge_title}" was approved. Reward granted!`;
+          await saveNotification(req_.user_id, title, body, 'achievement');
+          if (memberRow.fcm_token) sendPushNotification(memberRow.fcm_token, title, body, {type: 'challenge_review', status: 'approved'}).catch(() => {});
+        }
+      } catch (_) {}
     }
 
     res.json({ message: `Bulk approved ${pending.length} requests`, approved: pending.length });
@@ -373,20 +381,22 @@ exports.reviewRequest = async (req, res) => {
       await triggerAchievements(request.user_id);
     }
 
-    const [[memberRow]] = await pool.query(
-      `SELECT u.fcm_token, c.title AS challenge_title
-       FROM users u, challenges c
-       WHERE u.id = ? AND c.id = ?`,
-      [request.user_id, request.challenge_id]
-    );
-    if (memberRow) {
-      const title = status === 'approved' ? '🏆 Completion Approved!' : '❌ Completion Rejected';
-      const body = status === 'approved'
-        ? `Your completion for "${memberRow.challenge_title}" was approved. Reward granted!`
-        : `Your completion for "${memberRow.challenge_title}" was not approved. Try again!`;
-      await saveNotification(request.user_id, title, body, 'achievement');
-      if (memberRow.fcm_token) sendPushNotification(memberRow.fcm_token, title, body, {type: 'challenge_review', status}).catch(() => {});
-    }
+    try {
+      const [[memberRow]] = await pool.query(
+        `SELECT u.fcm_token, c.title AS challenge_title
+         FROM users u, challenges c
+         WHERE u.id = ? AND c.id = ?`,
+        [request.user_id, request.challenge_id]
+      );
+      if (memberRow) {
+        const title = status === 'approved' ? '🏆 Completion Approved!' : '❌ Completion Rejected';
+        const body = status === 'approved'
+          ? `Your completion for "${memberRow.challenge_title}" was approved. Reward granted!`
+          : `Your completion for "${memberRow.challenge_title}" was not approved. Try again!`;
+        await saveNotification(request.user_id, title, body, 'achievement');
+        if (memberRow.fcm_token) sendPushNotification(memberRow.fcm_token, title, body, {type: 'challenge_review', status}).catch(() => {});
+      }
+    } catch (_) {}
 
     res.json({ message: `Request ${status}` });
   } catch (error) {

@@ -303,23 +303,25 @@ exports.togglePostActive = async (req, res) => {
       [newActive, newActive ? null : 'admin', req.params.id]
     );
 
-    const { note } = req.body;
-    const title = newActive ? 'Post Reactivated' : 'Post Deactivated';
-    const baseBody = newActive
-      ? `Your post "${post.title}" has been reactivated by admin.`
-      : `Your post "${post.title}" has been deactivated by admin.`;
-    const body = note ? `${baseBody} Note: ${note}` : baseBody;
+    try {
+      const { note } = req.body;
+      const title = newActive ? 'Post Reactivated' : 'Post Deactivated';
+      const baseBody = newActive
+        ? `Your post "${post.title}" has been reactivated by admin.`
+        : `Your post "${post.title}" has been deactivated by admin.`;
+      const body = note ? `${baseBody} Note: ${note}` : baseBody;
 
-    await saveNotification(post.trainer_id, title, body, 'general', {
-      screen: 'ManagePosts',
-      params: {},
-      intent: 'post_status',
-      post_id: Number(req.params.id),
-    });
-    if (post.fcm_token) {
-      const { sendPushNotification } = require('../notification/notification.service');
-      sendPushNotification(post.fcm_token, title, body, { type: 'post_status' }).catch(() => {});
-    }
+      await saveNotification(post.trainer_id, title, body, 'general', {
+        screen: 'ManagePosts',
+        params: {},
+        intent: 'post_status',
+        post_id: Number(req.params.id),
+      });
+      if (post.fcm_token) {
+        const { sendPushNotification } = require('../notification/notification.service');
+        sendPushNotification(post.fcm_token, title, body, { type: 'post_status' }).catch(() => {});
+      }
+    } catch (_) {}
 
     res.json({ is_active: newActive });
   } catch (error) {
@@ -839,14 +841,16 @@ exports.acceptHire = async (req, res) => {
        WHERE th.id = ?`, [req.params.hire_id]
     );
     if (hireInfo) {
-      const mTitle = 'Hire Request Accepted!';
-      const mBody = `${hireInfo.trainer_name} accepted your hire request for "${hireInfo.post_title}". Your subscription is now active!`;
-      await saveNotification(hireInfo.member_id, mTitle, mBody, 'trainer_hire');
-      if (hireInfo.member_fcm) sendPushNotification(hireInfo.member_fcm, mTitle, mBody, {type: 'trainer_hire_active', post_id: String(hireInfo.post_id)}).catch(() => {});
+      try {
+        const mTitle = 'Hire Request Accepted!';
+        const mBody = `${hireInfo.trainer_name} accepted your hire request for "${hireInfo.post_title}". Your subscription is now active!`;
+        await saveNotification(hireInfo.member_id, mTitle, mBody, 'trainer_hire');
+        if (hireInfo.member_fcm) sendPushNotification(hireInfo.member_fcm, mTitle, mBody, {type: 'trainer_hire_active', post_id: String(hireInfo.post_id)}).catch(() => {});
 
-      const tTitle = 'Hire Accepted';
-      const tBody = `You accepted ${hireInfo.member_name}'s hire request for "${hireInfo.post_title}".`;
-      await saveNotification(req.user.id, tTitle, tBody, 'trainer_hire');
+        const tTitle = 'Hire Accepted';
+        const tBody = `You accepted ${hireInfo.member_name}'s hire request for "${hireInfo.post_title}".`;
+        await saveNotification(req.user.id, tTitle, tBody, 'trainer_hire');
+      } catch (_) {}
     }
 
     res.json({ message: 'Hire accepted. Hire is now active.' });
@@ -882,17 +886,19 @@ exports.declineHire = async (req, res) => {
        WHERE th.id = ?`, [req.params.hire_id]
     );
     if (hireInfo) {
-      const mTitle = 'Hire Request Declined';
-      const paymentOutcome = paymentStatus === 'refunded'
-        ? 'Your payment has been refunded through Midtrans.'
-        : paymentStatus === 'partial_refund'
-          ? 'Your payment has been partially refunded through Midtrans.'
-          : paymentStatus === 'settlement'
-            ? 'Midtrans still shows this payment as settled, so the refund must be handled manually.'
-            : 'Your payment has been reversed.';
-      const mBody = `${hireInfo.trainer_name} declined your hire request for "${hireInfo.post_title}". ${paymentOutcome}`;
-      await saveNotification(hireInfo.member_id, mTitle, mBody, 'trainer_hire');
-      if (hireInfo.member_fcm) sendPushNotification(hireInfo.member_fcm, mTitle, mBody, {type: 'trainer_hire_declined'}).catch(() => {});
+      try {
+        const mTitle = 'Hire Request Declined';
+        const paymentOutcome = paymentStatus === 'refunded'
+          ? 'Your payment has been refunded through Midtrans.'
+          : paymentStatus === 'partial_refund'
+            ? 'Your payment has been partially refunded through Midtrans.'
+            : paymentStatus === 'settlement'
+              ? 'Midtrans still shows this payment as settled, so the refund must be handled manually.'
+              : 'Your payment has been reversed.';
+        const mBody = `${hireInfo.trainer_name} declined your hire request for "${hireInfo.post_title}". ${paymentOutcome}`;
+        await saveNotification(hireInfo.member_id, mTitle, mBody, 'trainer_hire');
+        if (hireInfo.member_fcm) sendPushNotification(hireInfo.member_fcm, mTitle, mBody, {type: 'trainer_hire_declined'}).catch(() => {});
+      } catch (_) {}
     }
 
     res.json({
@@ -926,14 +932,16 @@ exports.endHire = async (req, res) => {
        WHERE th.id = ?`, [req.params.hire_id]
     );
     if (hireInfo) {
-      await saveNotification(req.user.id, 'Subscription Ended', `Your subscription to "${hireInfo.post_title}" has ended. You can now leave a review!`, 'trainer_hire');
-      const tTitle = 'Member Ended Subscription';
-      const tBody = `${hireInfo.member_name} ended their subscription to "${hireInfo.post_title}".`;
-      await saveNotification(hireInfo.trainer_id, tTitle, tBody, 'trainer_hire', {
-        screen: 'TrainerHireManagement',
-        params: { initialTab: 'past', hireId: hireInfo.id },
-      });
-      if (hireInfo.trainer_fcm) sendPushNotification(hireInfo.trainer_fcm, tTitle, tBody, {type: 'hire_ended'}).catch(() => {});
+      try {
+        await saveNotification(req.user.id, 'Subscription Ended', `Your subscription to "${hireInfo.post_title}" has ended. You can now leave a review!`, 'trainer_hire');
+        const tTitle = 'Member Ended Subscription';
+        const tBody = `${hireInfo.member_name} ended their subscription to "${hireInfo.post_title}".`;
+        await saveNotification(hireInfo.trainer_id, tTitle, tBody, 'trainer_hire', {
+          screen: 'TrainerHireManagement',
+          params: { initialTab: 'past', hireId: hireInfo.id },
+        });
+        if (hireInfo.trainer_fcm) sendPushNotification(hireInfo.trainer_fcm, tTitle, tBody, {type: 'hire_ended'}).catch(() => {});
+      } catch (_) {}
 
       await TrainerPost.reactivateIfSystemClosed(hireInfo.post_id);
     }
@@ -957,13 +965,15 @@ exports.requestHireEnd = async (req, res) => {
     const receiverId = requestedByMember ? hireInfo.trainer_id : hireInfo.member_id;
     const receiverFcm = requestedByMember ? hireInfo.trainer_fcm : hireInfo.member_fcm;
     const requesterName = requestedByMember ? hireInfo.member_name : hireInfo.trainer_name;
-    const title = 'Subscription End Request';
-    const body = `${requesterName} requested to end the subscription for "${hireInfo.post_title}". Please accept or reject the request.`;
 
-    await saveNotification(receiverId, title, body, 'trainer_hire');
-    if (receiverFcm) {
-      sendPushNotification(receiverFcm, title, body, { type: 'hire_end_request', hire_id: String(hireInfo.id) }).catch(() => {});
-    }
+    try {
+      const title = 'Subscription End Request';
+      const body = `${requesterName} requested to end the subscription for "${hireInfo.post_title}". Please accept or reject the request.`;
+      await saveNotification(receiverId, title, body, 'trainer_hire');
+      if (receiverFcm) {
+        sendPushNotification(receiverFcm, title, body, { type: 'hire_end_request', hire_id: String(hireInfo.id) }).catch(() => {});
+      }
+    } catch (_) {}
 
     res.json({ message: 'End request sent.' });
   } catch (error) {
@@ -992,17 +1002,21 @@ exports.respondHireEndRequest = async (req, res) => {
     const responderName = result.responderRole === 'member' ? hireInfo.member_name : hireInfo.trainer_name;
 
     if (result.code === 'accepted') {
-      await notifyHireEndedByAgreement(hireInfo);
+      try {
+        await notifyHireEndedByAgreement(hireInfo);
+      } catch (_) {}
       await TrainerPost.reactivateIfSystemClosed(hireInfo.post_id);
       return res.json({ message: 'Subscription ended by agreement.' });
     }
 
-    const title = 'End Request Declined';
-    const body = `${responderName} declined the request to end "${hireInfo.post_title}". Your subscription remains active.`;
-    await saveNotification(requesterId, title, body, 'trainer_hire');
-    if (requesterFcm) {
-      sendPushNotification(requesterFcm, title, body, { type: 'hire_end_request_declined', hire_id: String(hireInfo.id) }).catch(() => {});
-    }
+    try {
+      const title = 'End Request Declined';
+      const body = `${responderName} declined the request to end "${hireInfo.post_title}". Your subscription remains active.`;
+      await saveNotification(requesterId, title, body, 'trainer_hire');
+      if (requesterFcm) {
+        sendPushNotification(requesterFcm, title, body, { type: 'hire_end_request_declined', hire_id: String(hireInfo.id) }).catch(() => {});
+      }
+    } catch (_) {}
 
     res.json({ message: 'End request rejected.' });
   } catch (error) {
@@ -1052,22 +1066,24 @@ exports.submitReview = async (req, res) => {
       sessions_attended: confirmed,
     });
 
-    const [[postInfo]] = await pool.query(
-      `SELECT tp.trainer_id, tp.title, t.fcm_token AS trainer_fcm, m.name AS member_name
-       FROM trainer_posts tp
-       JOIN users t ON t.id = tp.trainer_id
-       JOIN users m ON m.id = ?
-       WHERE tp.id = ?`, [req.user.id, hire.post_id]
-    );
-    if (postInfo) {
-      const stars = '⭐'.repeat(rating);
-      const tTitle = 'New Review Received';
-      const tBody = `${postInfo.member_name} left a ${stars} review on "${postInfo.title}".`;
-      await saveNotification(postInfo.trainer_id, tTitle, tBody, 'trainer_hire', {
-        screen: 'ManagePosts',
-      });
-      if (postInfo.trainer_fcm) sendPushNotification(postInfo.trainer_fcm, tTitle, tBody, {type: 'new_review', post_id: String(hire.post_id)}).catch(() => {});
-    }
+    try {
+      const [[postInfo]] = await pool.query(
+        `SELECT tp.trainer_id, tp.title, t.fcm_token AS trainer_fcm, m.name AS member_name
+         FROM trainer_posts tp
+         JOIN users t ON t.id = tp.trainer_id
+         JOIN users m ON m.id = ?
+         WHERE tp.id = ?`, [req.user.id, hire.post_id]
+      );
+      if (postInfo) {
+        const stars = '⭐'.repeat(rating);
+        const tTitle = 'New Review Received';
+        const tBody = `${postInfo.member_name} left a ${stars} review on "${postInfo.title}".`;
+        await saveNotification(postInfo.trainer_id, tTitle, tBody, 'trainer_hire', {
+          screen: 'ManagePosts',
+        });
+        if (postInfo.trainer_fcm) sendPushNotification(postInfo.trainer_fcm, tTitle, tBody, {type: 'new_review', post_id: String(hire.post_id)}).catch(() => {});
+      }
+    } catch (_) {}
 
     res.status(201).json(result);
   } catch (error) {

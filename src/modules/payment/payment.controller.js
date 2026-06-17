@@ -128,11 +128,13 @@ exports.handleNotification = async (req, res) => {
     const status = payment?.status || mappedStatus;
 
     if (order_id.startsWith('hire-')) {
-      if (status === 'settlement') {
-        await handleSettledTrainerHire(order_id);
-      } else if (['failed', 'expired', 'refunded', 'partial_refund'].includes(status)) {
-        await TrainerHire.cancelPendingPayment(order_id);
-      }
+      try {
+        if (status === 'settlement') {
+          await handleSettledTrainerHire(order_id);
+        } else if (['failed', 'expired', 'refunded', 'partial_refund'].includes(status)) {
+          await TrainerHire.cancelPendingPayment(order_id);
+        }
+      } catch (_) {}
     }
 
     res.status(200).send('OK');
