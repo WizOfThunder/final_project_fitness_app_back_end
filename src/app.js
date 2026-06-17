@@ -23,7 +23,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 app.use((req, res, next) => {
-  if (req.method !== 'POST') return next();
+  if (!['POST', 'PUT', 'PATCH'].includes(req.method)) return next();
   const key = req.headers['idempotency-key'];
   if (!key) return next();
 
